@@ -64,14 +64,14 @@ Web UI messages:
 
 - `mindmap:ready`: bridge is loaded; parent can send initial data.
 - `mindmap:app-ready`: Vue and SimpleMindMap are initialized from the parent-provided full data.
-- `mindmap:dirty`: `{ dirty }`; emitted when the edited document changes.
+- `mindmap:dirty`: `{ dirty, revision }`; emitted after initialization when the live document changes. Repeated edits while already dirty still emit the new revision so auto-save debounce can restart.
 - `mindmap:save`: `{ requestId, revision, data }`; explicit save request. `Ctrl/Cmd + S` triggers this message.
 - `mindmap:data`: `{ data, dirty, revision }`; response to a data request.
 - `mindmap:save-status`: acknowledgement after the bridge processes `mindmap:save-result`.
 
 ### Parent -> Web UI
 
-- `mindmap:init`: supplies the initial full SimpleMindMap data and starts the app. It may include `dirty: true` for a newly created, not-yet-persisted document.
+- `mindmap:init`: supplies the initial full SimpleMindMap data and starts the app. The NocoDB userscript normally sends `dirty: false`; initialization itself never makes the document dirty.
 - `mindmap:request-save`: asks the Web UI to send its latest `getData(true)` through `mindmap:save`.
 - `mindmap:request-data`: asks the Web UI to return current data without saving.
 - `mindmap:save-result`: `{ requestId, ok, error }`; acknowledges the NocoDB PATCH result.
@@ -82,7 +82,7 @@ A minimal init message is:
 {
   source: 'nocodb-mindmap',
   type: 'mindmap:init',
-  dirty: true,
+  dirty: false,
   data: {
     layout: 'mindMap',
     root: {},
@@ -143,16 +143,17 @@ view_theme_change
 
 Upstream `storeData()` calls in embed mode also reduce to `markDirty()` as a compatibility path. A microtask-level dedupe prevents one logical change from incrementing the revision multiple times in the same task.
 
-A new document can arrive with `dirty: true` in `mindmap:init`; this state is preserved through initialization so closing an unsaved new map still requires explicit save or discard.
+Initial render events are ignored until the renderer settles. The adapter then records the current full document as the baseline and only marks dirty when a later `getData(true)` snapshot differs from that baseline. Opening a record without editing therefore remains clean.
 
 ## Saving model
 
-Normal edits never call the NocoDB API. They update the live SimpleMindMap instance and mark the current revision dirty.
+Normal edits update the live SimpleMindMap instance and mark the current revision dirty. Embed mode uses a 2-second debounce: every real document change restarts the timer; after 2 seconds without another change the bridge automatically sends the current full `getData(true)` to the parent for persistence.
 
 ```text
 edit
-  -> dirty only
-  -> no NocoDB PATCH
+  -> dirty
+  -> restart 2 s timer
+  -> auto-save current getData(true)
 
 manual save / Ctrl+S / parent close-confirm save
   -> live mindMap.getData(true)
@@ -164,23 +165,24 @@ manual save / Ctrl+S / parent close-confirm save
   -> dirty=false only when they still match
 ```
 
-The parent may explicitly request a save even when its own cached dirty flag is false. The Web UI always returns the current complete `getData(true)` for an explicit `mindmap:request-save`; the parent decides whether to PATCH. This makes the explicit Save button a reliable persistence action rather than depending on status synchronization.
+Manual save remains available and bypasses the debounce delay. The parent may explicitly request a save even when its own cached dirty flag is false. The Web UI always returns the current complete `getData(true)` for an explicit `mindmap:request-save`; the parent decides whether to PATCH. This makes the explicit Save button a reliable persistence action rather than depending on status synchronization.
 
 If more edits happen while a save is in flight, the successful response for the older revision does not clear the new dirty state.
 
-## Default theme
+## Default layout and theme
 
 The NocoDB userscript creates new documents with:
 
 ```text
+layout = logicalStructure
 theme.template = classic15
 ```
 
-which is the `simple-mind-map-plugin-themes` theme displayed as `脑图经典15`. Existing NocoDB mind maps retain their saved theme.
+`logicalStructure` is the right-expanding `逻辑结构图`; `classic15` is the `simple-mind-map-plugin-themes` theme displayed as `脑图经典15`. Existing NocoDB mind maps retain their saved layout and theme.
 
 ## Performance
 
-The userscript may preconnect to the MindMap origin and create a temporary off-screen embed iframe while the NocoDB page is idle. That preload does not send `mindmap:init`, so Vue/SimpleMindMap is not instantiated for a record; it only warms the Web UI document and static module cache. The real iframe can therefore reuse already fetched resources when the user opens a mind map.
+The userscript preconnects to the MindMap origin and creates a persistent off-screen embed iframe while the NocoDB page is idle. It does not send `mindmap:init`, so no record editor is created, but the Web UI document and modules are already loaded. On the next open the same ready iframe is moved into the modal instead of creating a second iframe. After that modal closes, a new off-screen iframe is prepared for the following open.
 
 The current deployment still uses Vue Dev Server for hot reload. A future production build served by nginx can reduce cold-start overhead further.
 
@@ -198,3 +200,7 @@ The NocoDB userscript owns:
 - validating the iframe origin before accepting messages.
 
 The existing root `nginx.conf`, `dist/`, and production-style static deployment files are retained for upstream compatibility, while the provided `docker-compose.yml` uses the Vue development server for hot reload.
+
+## Embed-only shortcut
+
+In NocoDB embed mode, `F2` keeps its upstream behavior and `Space` is added as a second way to edit the currently selected single node. The Space handler is disabled while an input/textarea/contenteditable editor is focused, so normal spaces inside node text are unaffected.

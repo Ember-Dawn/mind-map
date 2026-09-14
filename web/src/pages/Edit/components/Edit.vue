@@ -243,6 +243,9 @@ export default {
     this.$bus.$on('showLoading', this.handleShowLoading)
     this.$bus.$on('localStorageExceeded', this.onLocalStorageExceeded)
     window.addEventListener('resize', this.handleResize)
+    if (window.nocodbMindMapEmbedMode) {
+      window.addEventListener('keydown', this.handleEmbedSpaceEdit, true)
+    }
     this.$bus.$on('showDownloadTip', this.showDownloadTip)
     this.webTip()
   },
@@ -259,6 +262,7 @@ export default {
     this.$bus.$off('showLoading', this.handleShowLoading)
     this.$bus.$off('localStorageExceeded', this.onLocalStorageExceeded)
     window.removeEventListener('resize', this.handleResize)
+    window.removeEventListener('keydown', this.handleEmbedSpaceEdit, true)
     this.$bus.$off('showDownloadTip', this.showDownloadTip)
     this.mindMap.destroy()
   },
@@ -274,6 +278,31 @@ export default {
 
     handleStartTextEdit() {
       this.mindMap.renderer.startTextEdit()
+    },
+
+    handleEmbedSpaceEdit(event) {
+      if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
+      if (event.code !== 'Space' && event.key !== ' ') return
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+
+      const target = event.target
+      if (
+        target &&
+        (target.matches?.('input, textarea, select, [contenteditable="true"]') ||
+          target.closest?.('[contenteditable="true"]'))
+      ) {
+        return
+      }
+
+      const renderer = this.mindMap.renderer
+      if (!renderer || renderer.activeNodeList.length !== 1) return
+      if (renderer.textEdit && renderer.textEdit.isShowTextEdit()) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      renderer.textEdit.show({
+        node: renderer.activeNodeList[0]
+      })
     },
 
     handleEndTextEdit() {

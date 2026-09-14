@@ -3,6 +3,7 @@ const isEmbedMode = params.get('embed') === '1'
 
 if (isEmbedMode) {
   const parentOrigin = params.get('parentOrigin') || '*'
+  const AUTO_SAVE_DELAY_MS = 2000
 
   const cloneJson = value => {
     if (value === null || value === undefined) return value
@@ -16,13 +17,19 @@ if (isEmbedMode) {
     return JSON.parse(JSON.stringify(value))
   }
 
+  const getSignature = value => JSON.stringify(value)
+
   const state = {
     initialized: false,
     appStarted: false,
     startTimer: null,
+    settleTimer: null,
+    autoSaveTimer: null,
     dirtyMarkQueued: false,
     mindMap: null,
     initialData: null,
+    baselineSignature: '',
+    lastObservedSignature: '',
     dirty: false,
     initialDirty: false,
     revision: 0,
@@ -55,25 +62,26 @@ if (isEmbedMode) {
     return cloneJson(state.initialData)
   }
 
-  const setDirty = dirty => {
-    const next = Boolean(dirty)
-    if (state.dirty === next) return
-    state.dirty = next
-    postToParent('mindmap:dirty', { dirty: state.dirty })
+  const clearAutoSave = () => {
+    if (!state.autoSaveTimer) return
+    window.clearTimeout(state.autoSaveTimer)
+    state.autoSaveTimer = null
   }
 
-  const markDirty = () => {
-    if (!state.initialized || state.dirtyMarkQueued) return
-    state.dirtyMarkQueued = true
-    queueMicrotask(() => {
-      state.dirtyMarkQueued = false
-      if (!state.initialized) return
-      state.revision += 1
-      setDirty(true)
-    })
+  const setDirty = (dirty, { forceNotify = false } = {}) => {
+    const next = Boolean(dirty)
+    const changed = state.dirty !== next
+    state.dirty = next
+    if (changed || forceNotify) {
+      postToParent('mindmap:dirty', {
+        dirty: state.dirty,
+        revision: state.revision
+      })
+    }
   }
 
   const requestSave = data => {
+    clearAutoSave()
     const currentData = data ? cloneJson(data) : getCurrentData()
     if (!currentData) return
 
@@ -87,23 +95,89 @@ if (isEmbedMode) {
     })
   }
 
+  const scheduleAutoSave = () => {
+    clearAutoSave()
+    if (!state.initialized || !state.dirty) return
+    state.autoSaveTimer = window.setTimeout(() => {
+      state.autoSaveTimer = null
+      if (!state.initialized || !state.dirty) return
+      requestSave()
+    }, AUTO_SAVE_DELAY_MS)
+  }
+
+  const markDirty = () => {
+    if (!state.initialized || state.dirtyMarkQueued) return
+    state.dirtyMarkQueued = true
+    queueMicrotask(() => {
+      state.dirtyMarkQueued = false
+      if (!state.initialized) return
+
+      const currentData = getCurrentData()
+      if (!currentData) return
+      const signature = getSignature(currentData)
+      if (signature === state.lastObservedSignature) return
+
+      state.lastObservedSignature = signature
+      state.revision += 1
+      const dirty = signature !== state.baselineSignature
+      setDirty(dirty, { forceNotify: true })
+      if (dirty) {
+        scheduleAutoSave()
+      } else {
+        clearAutoSave()
+      }
+    })
+  }
+
+  const finishInitialization = () => {
+    if (state.initialized || !state.mindMap) return
+    if (state.settleTimer) {
+      window.clearTimeout(state.settleTimer)
+      state.settleTimer = null
+    }
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (state.initialized || !state.mindMap) return
+        const currentData = getCurrentData()
+        state.baselineSignature = getSignature(currentData)
+        state.lastObservedSignature = state.baselineSignature
+        state.revision = 0
+        state.initialized = true
+        state.dirty = state.initialDirty
+        postToParent('mindmap:app-ready')
+        if (state.dirty) {
+          setDirty(true, { forceNotify: true })
+          scheduleAutoSave()
+        }
+      })
+    })
+  }
+
+  const waitForInitialRender = () => {
+    if (state.initialized || !state.mindMap) return
+    const renderer = state.mindMap.renderer
+    if (renderer && renderer.isRendering) {
+      state.settleTimer = window.setTimeout(waitForInitialRender, 50)
+      return
+    }
+    finishInitialization()
+  }
+
   const attachMindMap = mindMap => {
-    if (!mindMap || state.initialized) return
+    if (!mindMap || state.mindMap) return
     state.mindMap = mindMap
 
     if (typeof mindMap.on === 'function') {
       mindMap.on('data_change', markDirty)
       mindMap.on('view_data_change', markDirty)
       mindMap.on('view_theme_change', markDirty)
+      mindMap.on('node_tree_render_end', finishInitialization)
     }
 
-    state.initialized = true
-    state.dirty = state.initialDirty
-    state.revision = 0
-    postToParent('mindmap:app-ready')
-    if (state.dirty) {
-      postToParent('mindmap:dirty', { dirty: true })
-    }
+    // Initial rendering can emit document/view events. Keep the loading cover up
+    // and establish the baseline only after the renderer has settled.
+    state.settleTimer = window.setTimeout(waitForInitialRender, 50)
   }
 
   window.nocodbMindMapEmbed = {
@@ -163,6 +237,10 @@ if (isEmbedMode) {
         const savedRevision = state.pendingSaves.get(requestId)
         state.pendingSaves.delete(requestId)
         if (message.ok && savedRevision === state.revision) {
+          const currentData = getCurrentData()
+          state.baselineSignature = getSignature(currentData)
+          state.lastObservedSignature = state.baselineSignature
+          clearAutoSave()
           setDirty(false)
         }
         postToParent('mindmap:save-status', {

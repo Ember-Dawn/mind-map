@@ -262,6 +262,7 @@ export default {
     this.$bus.$off('localStorageExceeded', this.onLocalStorageExceeded)
     window.removeEventListener('resize', this.handleResize)
     window.removeEventListener('keydown', this.handleSpaceEditKeydown, true)
+    window.removeEventListener('paste', this.handleImagePaste, true)
     if (this.spaceEditFrame) {
       window.cancelAnimationFrame(this.spaceEditFrame)
       this.spaceEditFrame = 0
@@ -341,6 +342,62 @@ export default {
         const [currentShortcut] = this.mindMap.keyCommand.getShortcutFn('F2')
         if (currentShortcut) currentShortcut()
       })
+    },
+
+    async handleImagePaste(e) {
+      if (!this.mindMap || e.defaultPrevented) return
+
+      const target = e.target
+      if (
+        target &&
+        (target.isContentEditable ||
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      ) {
+        return
+      }
+
+      const renderer = this.mindMap.renderer
+      if (
+        !renderer ||
+        renderer.activeNodeList.length !== 1 ||
+        (renderer.textEdit && renderer.textEdit.isShowTextEdit())
+      ) {
+        return
+      }
+
+      const clipboardData = e.clipboardData
+      if (!clipboardData) return
+
+      const item = Array.from(clipboardData.items || []).find(
+        current => current.kind === 'file' && /^image\//i.test(current.type)
+      )
+      const file = item
+        ? item.getAsFile()
+        : Array.from(clipboardData.files || []).find(current =>
+            /^image\//i.test(current.type)
+          )
+      if (!file) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      if (typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation()
+      }
+
+      try {
+        const { url, size } = await uploadImage(file)
+        const node = renderer.activeNodeList[0]
+        if (!node) return
+        node.setImage({
+          url,
+          title: node.getData('imageTitle') || '',
+          width: size.width || 100,
+          height: size.height || 100
+        })
+      } catch (error) {
+        console.error('[Image Upload] Clipboard paste failed:', error)
+        this.$message.error(error?.message || '图片上传失败')
+      }
     },
 
     handleEndTextEdit() {
@@ -531,6 +588,7 @@ export default {
         this.manualSave()
       })
       window.addEventListener('keydown', this.handleSpaceEditKeydown, true)
+      window.addEventListener('paste', this.handleImagePaste, true)
       // 转发事件
       ;[
         'node_active',

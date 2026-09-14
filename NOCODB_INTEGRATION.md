@@ -24,6 +24,8 @@ http://localhost:9871
 
 The repository is bind-mounted into the container so edits under `web/src/` are visible immediately. `/app/web/node_modules` is stored in the Docker named volume `mind-map-node-modules`. On first start, the container runs `npm ci` automatically if `node_modules/.bin/vue-cli-service` is missing.
 
+The development server is published through `https://mindmap.380782744.xyz`. Because TLS terminates at Cloudflare while webpack-dev-server itself still listens on plain HTTP inside the container, `web/vue.config.js` explicitly tells the webpack-dev-server v3 client to use the public HTTPS host for SockJS/HMR instead of `localhost:8080`. The defaults can be overridden with `MIND_MAP_DEV_PUBLIC_HOST` and `MIND_MAP_DEV_PUBLIC_URL` if the public development hostname changes.
+
 ## Embed URL
 
 Standalone mode remains unchanged. NocoDB integration is enabled only when the Web UI is opened with:
@@ -189,7 +191,7 @@ The userscript preconnects to the MindMap origin and creates a persistent off-sc
 
 The parent also has recovery timers: if the adopted iframe does not answer the handshake, or if it answers but does not reach `mindmap:app-ready` after initialization, the userscript replaces it with one fresh iframe and retries once. A second failure is surfaced as an explicit WebUI initialization error instead of leaving the loading cover forever. After a modal closes, a new off-screen iframe is prepared for the following open.
 
-The current deployment still uses Vue Dev Server for hot reload. A future production build served by nginx can reduce cold-start overhead further.
+The current deployment still uses Vue Dev Server for hot reload. Its HMR client is configured for the Cloudflare-facing public host, so browser sessions opened through `https://mindmap.380782744.xyz` connect back through `/sockjs-node` on port 443 instead of attempting to reach the browser machine's `localhost:8080`. A future production build served by nginx can reduce cold-start overhead further.
 
 ## Repository responsibilities
 
@@ -208,6 +210,8 @@ The existing root `nginx.conf`, `dist/`, and production-style static deployment 
 
 ## Node-edit shortcut
 
-Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior and `Space` reuses the **same callback that the live SimpleMindMap instance registered for `F2`**. The WebUI reads that callback with `keyCommand.getShortcutFn('F2')`, explicitly maps `Spacebar` to key code `32`, and registers the same callback for `Spacebar`. This avoids maintaining a second node-edit implementation and guarantees that both keys enter the same editor path.
+Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior and `Space` enters the same node editor through the callback that the live SimpleMindMap instance registered for `F2`.
 
-The Space binding is temporarily removed on `before_show_text_edit` and restored on `hide_text_edit`, so Space remains normal text input while a node is being edited. This binding intentionally applies globally rather than depending on `window.nocodbMindMapEmbedMode`, because node editing is a WebUI behavior rather than an NocoDB-only integration behavior. The WebUI performs the binding on the live installed `simple-mind-map` instance rather than editing the repository's separate `simple-mind-map/src/` checkout, because `web/package.json` currently loads `simple-mind-map` from the installed npm dependency.
+`Space` is intentionally handled by a small capture-phase `keydown` adapter rather than being registered as another SimpleMindMap `keyCommand` shortcut. The adapter only acts when exactly one node is selected, no text editor is already open, no modifier key is pressed, and focus is not in an input, textarea, select, or contenteditable element. It prevents the triggering Space from becoming text input, stops that key event from reaching the normal shortcut chain, and invokes the upstream F2 callback on the next animation frame. Delaying the callback until the original Space event has finished avoids the RichText/TextEdit editor being created and immediately affected by the same printable key event, which previously could make the first editor frame appear at the page origin before a later input corrected its position.
+
+Once node editing is active, the adapter does nothing, so Space is ordinary text input inside both the plain text editor and the RichText editor. The implementation still reuses the installed runtime `simple-mind-map` F2 behavior rather than maintaining a separate node-edit path.

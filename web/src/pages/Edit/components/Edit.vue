@@ -196,8 +196,7 @@ export default {
       prevImg: '',
       storeConfigTimer: null,
       showDragMask: false,
-      spaceEditShortcut: null,
-      spaceShortcutEnabled: false
+      spaceEditShortcut: null
     }
   },
   computed: {
@@ -261,6 +260,7 @@ export default {
     this.$bus.$off('showLoading', this.handleShowLoading)
     this.$bus.$off('localStorageExceeded', this.onLocalStorageExceeded)
     window.removeEventListener('resize', this.handleResize)
+    window.removeEventListener('keydown', this.handleSpaceEditKeydown, true)
     this.$bus.$off('showDownloadTip', this.showDownloadTip)
     this.mindMap.destroy()
   },
@@ -278,31 +278,64 @@ export default {
       this.mindMap.renderer.startTextEdit()
     },
 
-    enableSpaceEditShortcut() {
-      if (!this.mindMap) return
-
-      if (!this.spaceEditShortcut) {
-        const [shortcut] = this.mindMap.keyCommand.getShortcutFn('F2')
-        if (!shortcut) return
-        this.mindMap.keyCommand.extendKeyMap('Spacebar', 32)
-        this.spaceEditShortcut = shortcut
-      }
-
-      if (this.spaceShortcutEnabled) return
-      this.mindMap.keyCommand.addShortcut('Spacebar', this.spaceEditShortcut)
-      this.spaceShortcutEnabled = true
+    bindSpaceEditShortcut() {
+      if (!this.mindMap || this.spaceEditShortcut) return
+      const [shortcut] = this.mindMap.keyCommand.getShortcutFn('F2')
+      if (!shortcut) return
+      this.spaceEditShortcut = shortcut
+      window.addEventListener('keydown', this.handleSpaceEditKeydown, true)
     },
 
-    disableSpaceEditShortcut() {
+    handleSpaceEditKeydown(e) {
+      if (!this.mindMap || !this.spaceEditShortcut) return
       if (
-        !this.mindMap ||
-        !this.spaceEditShortcut ||
-        !this.spaceShortcutEnabled
+        e.defaultPrevented ||
+        e.isComposing ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
+        e.shiftKey ||
+        (e.code !== 'Space' && e.key !== ' ' && e.keyCode !== 32)
       ) {
         return
       }
-      this.mindMap.keyCommand.removeShortcut('Spacebar', this.spaceEditShortcut)
-      this.spaceShortcutEnabled = false
+
+      const target = e.target
+      if (
+        target &&
+        (target.isContentEditable ||
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      ) {
+        return
+      }
+
+      const renderer = this.mindMap.renderer
+      if (
+        !renderer ||
+        renderer.activeNodeList.length !== 1 ||
+        (renderer.textEdit && renderer.textEdit.isShowTextEdit())
+      ) {
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      if (typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation()
+      }
+
+      requestAnimationFrame(() => {
+        if (!this.mindMap || !this.spaceEditShortcut) return
+        const currentRenderer = this.mindMap.renderer
+        if (
+          !currentRenderer ||
+          currentRenderer.activeNodeList.length !== 1 ||
+          (currentRenderer.textEdit && currentRenderer.textEdit.isShowTextEdit())
+        ) {
+          return
+        }
+        this.spaceEditShortcut()
+      })
     },
 
     handleEndTextEdit() {
@@ -483,9 +516,7 @@ export default {
       this.mindMap.keyCommand.addShortcut('Control+s', () => {
         this.manualSave()
       })
-      this.enableSpaceEditShortcut()
-      this.mindMap.on('before_show_text_edit', this.disableSpaceEditShortcut)
-      this.mindMap.on('hide_text_edit', this.enableSpaceEditShortcut)
+      this.bindSpaceEditShortcut()
       // 转发事件
       ;[
         'node_active',

@@ -1,6 +1,10 @@
 const path = require('path')
 const isDev = process.env.NODE_ENV === 'development'
 const isLibrary = process.env.NODE_ENV === 'library'
+const devServerPublicHost =
+  process.env.MIND_MAP_DEV_PUBLIC_HOST || 'mindmap.380782744.xyz'
+const devServerPublicUrl =
+  process.env.MIND_MAP_DEV_PUBLIC_URL || `https://${devServerPublicHost}`
 
 const WebpackDynamicPublicPathPlugin = require('webpack-dynamic-public-path')
 
@@ -43,6 +47,10 @@ module.exports = {
     host: '0.0.0.0',
     port: 8080,
     disableHostCheck: true,
+    public: devServerPublicUrl,
+    sockHost: devServerPublicHost,
+    sockPort: 443,
+    sockPath: '/sockjs-node',
     watchOptions: {
       poll: 1000,
       ignored: /node_modules/

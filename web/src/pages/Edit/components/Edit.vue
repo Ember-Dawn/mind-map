@@ -114,6 +114,7 @@ import NodeIconToolbar from './NodeIconToolbar.vue'
 import OutlineEdit from './OutlineEdit.vue'
 import { showLoading, hideLoading } from '@/utils/loading'
 import handleClipboardText from '@/utils/handleClipboardText'
+import { uploadImage } from '@/utils/imageUpload'
 import { getParentWithClass } from '@/utils'
 import Scrollbar from './Scrollbar.vue'
 import exampleData from 'simple-mind-map/example/exampleData'
@@ -447,6 +448,15 @@ export default {
         useLeftKeySelectionRightKeyDrag: this.useLeftKeySelectionRightKeyDrag,
         customInnerElsAppendTo: null,
         customHandleClipboardText: handleClipboardText,
+        handleNodePasteImg: async blob => {
+          try {
+            return await uploadImage(blob)
+          } catch (error) {
+            console.error('[Image Upload] Paste upload failed:', error)
+            this.$message.error(error?.message || '图片上传失败')
+            throw error
+          }
+        },
         defaultNodeImage: require('../../../assets/img/图片加载失败.svg'),
         initRootNodePosition: ['center', 'center'],
         handleIsSplitByWrapOnPasteCreateNewNode: () => {

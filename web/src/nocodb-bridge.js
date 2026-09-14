@@ -28,6 +28,7 @@ if (isEmbedMode) {
     dirtyMarkQueued: false,
     mindMap: null,
     initialData: null,
+    imageUploadConfig: null,
     baselineSignature: '',
     lastObservedSignature: '',
     dirty: false,
@@ -184,6 +185,9 @@ if (isEmbedMode) {
     getInitialData() {
       return cloneJson(state.initialData)
     },
+    getImageUploadConfig() {
+      return cloneJson(state.imageUploadConfig)
+    },
     attachMindMap,
     markDirty,
     requestSave
@@ -220,10 +224,14 @@ if (isEmbedMode) {
         if (state.appStarted) return
         if (!message.data || typeof message.data !== 'object') return
         state.initialData = cloneJson(message.data)
+        state.imageUploadConfig = cloneJson(message.imageUploadConfig || null)
         state.initialDirty = Boolean(message.dirty)
         state.dirty = state.initialDirty
         state.revision = 0
         startApp()
+        break
+      case 'mindmap:image-upload-config':
+        state.imageUploadConfig = cloneJson(message.imageUploadConfig || null)
         break
       case 'mindmap:request-save':
         requestSave()

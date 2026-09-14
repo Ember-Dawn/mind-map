@@ -5,6 +5,53 @@
       :class="{ isDark: isDark }"
       v-if="configData"
     >
+      <div class="title noTop">图片上传</div>
+      <div class="row">
+        <div class="rowItem">
+          <el-checkbox
+            v-model="imageHostConfig.enabled"
+            @change="updateImageHostConfig"
+            >启用 EasyImages2.0 图床</el-checkbox
+          >
+        </div>
+      </div>
+      <template v-if="imageHostConfig.enabled">
+        <div class="row">
+          <div class="rowItem imageHostRow">
+            <span class="name">图床类型</span>
+            <el-input size="small" value="EasyImages2.0" disabled></el-input>
+          </div>
+        </div>
+        <div class="row">
+          <div class="rowItem imageHostRow">
+            <span class="name">图床地址</span>
+            <el-input
+              v-model="imageHostConfig.url"
+              size="small"
+              placeholder="https://img.example.com"
+              @change="updateImageHostConfig"
+              @keydown.native.stop
+            ></el-input>
+          </div>
+        </div>
+        <div class="row">
+          <div class="rowItem imageHostRow">
+            <span class="name">API Token</span>
+            <el-input
+              v-model="imageHostConfig.token"
+              type="password"
+              size="small"
+              autocomplete="off"
+              @change="updateImageHostConfig"
+              @keydown.native.stop
+            ></el-input>
+          </div>
+        </div>
+        <div class="imageHostTip">
+          可填写 EasyImages2.0 站点根地址或完整 /api/index.php 地址。NocoDB 嵌入模式下，油猴脚本传入的图床配置优先，本页配置不会被覆盖。
+        </div>
+      </template>
+      <div class="title">常规设置</div>
       <!-- 水印 -->
       <div class="row">
         <!-- 是否显示水印 -->
@@ -376,6 +423,10 @@ import Sidebar from './Sidebar.vue'
 import { storeConfig } from '@/api'
 import { mapState, mapMutations } from 'vuex'
 import Color from './Color.vue'
+import {
+  getStoredImageHostConfig,
+  storeImageHostConfig
+} from '@/utils/imageUpload'
 
 export default {
   components: {
@@ -419,6 +470,7 @@ export default {
           fontSize: 1
         }
       },
+      imageHostConfig: getStoredImageHostConfig(),
       updateWatermarkTimer: null,
       enableNodeRichText: true,
       localConfigs: {
@@ -441,6 +493,7 @@ export default {
         this.$refs.sidebar.show = true
         this.initConfig()
         this.initWatermark()
+        this.imageHostConfig = getStoredImageHostConfig()
       } else {
         this.$refs.sidebar.show = false
       }
@@ -489,6 +542,10 @@ export default {
       )
       this.watermarkConfig.show = !!config.text
       this.watermarkConfig.textStyle = { ...config.textStyle }
+    },
+
+    updateImageHostConfig() {
+      this.imageHostConfig = storeImageHostConfig(this.imageHostConfig)
     },
 
     // 更新其他配置
@@ -595,6 +652,10 @@ export default {
         }
       }
     }
+
+    .imageHostTip {
+      color: hsla(0, 0%, 100%, 0.5);
+    }
   }
 
   .title {
@@ -620,6 +681,14 @@ export default {
       align-items: center;
       margin-bottom: 5px;
 
+      &.imageHostRow {
+        width: 100%;
+
+        .el-input {
+          flex: 1;
+        }
+      }
+
       .name {
         font-size: 12px;
         margin-right: 10px;
@@ -635,6 +704,13 @@ export default {
         cursor: pointer;
       }
     }
+  }
+
+  .imageHostTip {
+    margin: -2px 0 12px;
+    color: rgba(26, 26, 26, 0.55);
+    font-size: 12px;
+    line-height: 1.5;
   }
 }
 </style>

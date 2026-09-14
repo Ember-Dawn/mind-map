@@ -29,6 +29,8 @@
 </template>
 
 <script>
+import { uploadImage } from '@/utils/imageUpload'
+
 export default {
   model: {
     prop: 'value',
@@ -42,7 +44,8 @@ export default {
   },
   data() {
     return {
-      file: null
+      file: null,
+      imageSize: null
     }
   },
   methods: {
@@ -60,17 +63,24 @@ export default {
     },
 
     // 选择图片
-    selectImg(file) {
+    async selectImg(file) {
+      if (!file) return
       this.file = file
-      let fr = new FileReader()
-      fr.readAsDataURL(file)
-      fr.onload = e => {
-        this.$emit('change', e.target.result)
+      try {
+        const result = await uploadImage(file)
+        this.imageSize = result.size
+        this.$emit('change', result.url)
+      } catch (error) {
+        console.error('[Image Upload] Failed:', error)
+        this.$message.error(error?.message || '图片处理失败')
+        this.file = null
+        this.imageSize = null
       }
     },
 
     // 获取图片大小
     getSize() {
+      if (this.imageSize) return Promise.resolve(this.imageSize)
       return new Promise(resolve => {
         let img = new Image()
         img.src = this.value
@@ -93,6 +103,7 @@ export default {
     deleteImg() {
       this.$emit('change', '')
       this.file = null
+      this.imageSize = null
     }
   }
 }

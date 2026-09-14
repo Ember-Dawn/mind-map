@@ -195,7 +195,9 @@ export default {
       mindMapConfig: {},
       prevImg: '',
       storeConfigTimer: null,
-      showDragMask: false
+      showDragMask: false,
+      embedSpaceEditShortcut: null,
+      embedSpaceShortcutEnabled: false
     }
   },
   computed: {
@@ -276,29 +278,38 @@ export default {
       this.mindMap.renderer.startTextEdit()
     },
 
-    handleEmbedSpaceEdit() {
-      if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
-      const renderer = this.mindMap.renderer
-      if (!renderer || renderer.activeNodeList.length !== 1) return
-      renderer.textEdit.show({
-        node: renderer.activeNodeList[0]
-      })
-    },
-
     enableEmbedSpaceShortcut() {
       if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
+
+      if (!this.embedSpaceEditShortcut) {
+        const [shortcut] = this.mindMap.keyCommand.getShortcutFn('F2')
+        if (!shortcut) return
+        this.mindMap.keyCommand.extendKeyMap('Spacebar', 32)
+        this.embedSpaceEditShortcut = shortcut
+      }
+
+      if (this.embedSpaceShortcutEnabled) return
       this.mindMap.keyCommand.addShortcut(
         'Spacebar',
-        this.handleEmbedSpaceEdit
+        this.embedSpaceEditShortcut
       )
+      this.embedSpaceShortcutEnabled = true
     },
 
     disableEmbedSpaceShortcut() {
-      if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
+      if (
+        !window.nocodbMindMapEmbedMode ||
+        !this.mindMap ||
+        !this.embedSpaceEditShortcut ||
+        !this.embedSpaceShortcutEnabled
+      ) {
+        return
+      }
       this.mindMap.keyCommand.removeShortcut(
         'Spacebar',
-        this.handleEmbedSpaceEdit
+        this.embedSpaceEditShortcut
       )
+      this.embedSpaceShortcutEnabled = false
     },
 
     handleEndTextEdit() {

@@ -208,4 +208,6 @@ The existing root `nginx.conf`, `dist/`, and production-style static deployment 
 
 ## Embed-only shortcut
 
-In NocoDB embed mode, `F2` keeps its upstream behavior and `Space` is added through SimpleMindMap's own `keyCommand` system (`Spacebar` in the library key map) as a second way to edit the currently selected single node. The embed shortcut is temporarily removed on `before_show_text_edit` and restored on `hide_text_edit`, so pressing Space inside the node editor remains normal text input.
+In NocoDB embed mode, `F2` keeps its upstream behavior and `Space` reuses the **same callback that the live SimpleMindMap instance registered for `F2`**. The WebUI reads that callback with `keyCommand.getShortcutFn('F2')`, explicitly maps `Spacebar` to key code `32`, and registers the same callback for `Spacebar`. This avoids maintaining a second node-edit implementation and guarantees that both keys enter the same editor path.
+
+The Space binding is temporarily removed on `before_show_text_edit` and restored on `hide_text_edit`, so Space remains normal text input while a node is being edited. The WebUI intentionally performs this binding on the live installed `simple-mind-map` instance rather than editing the repository's separate `simple-mind-map/src/` checkout, because `web/package.json` currently loads `simple-mind-map` from the installed npm dependency.

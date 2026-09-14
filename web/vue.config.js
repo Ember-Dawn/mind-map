@@ -40,6 +40,13 @@ module.exports = {
     }
   },
   devServer: {
+    host: '0.0.0.0',
+    port: 8080,
+    disableHostCheck: true,
+    watchOptions: {
+      poll: 1000,
+      ignored: /node_modules/
+    },
     proxy: {
       '^/api/v3/': {
         target: 'http://ark.cn-beijing.volces.com',

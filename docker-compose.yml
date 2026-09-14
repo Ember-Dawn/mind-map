@@ -1,0 +1,19 @@
+services:
+  mind-map:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mind-map
+    working_dir: /app/web
+    ports:
+      - "9871:8080"
+    volumes:
+      - ./:/app
+      - mind-map-node-modules:/app/web/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    restart: unless-stopped
+
+volumes:
+  mind-map-node-modules:

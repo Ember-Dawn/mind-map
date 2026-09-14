@@ -197,7 +197,9 @@ export default {
       storeConfigTimer: null,
       showDragMask: false,
       spaceEditShortcut: null,
-      spaceShortcutEnabled: false
+      spaceShortcutEnabled: false,
+      spaceShortcutRetryFrame: 0,
+      spaceShortcutRetryCount: 0
     }
   },
   computed: {
@@ -261,6 +263,10 @@ export default {
     this.$bus.$off('showLoading', this.handleShowLoading)
     this.$bus.$off('localStorageExceeded', this.onLocalStorageExceeded)
     window.removeEventListener('resize', this.handleResize)
+    if (this.spaceShortcutRetryFrame) {
+      window.cancelAnimationFrame(this.spaceShortcutRetryFrame)
+      this.spaceShortcutRetryFrame = 0
+    }
     this.$bus.$off('showDownloadTip', this.showDownloadTip)
     this.mindMap.destroy()
   },
@@ -283,9 +289,23 @@ export default {
 
       if (!this.spaceEditShortcut) {
         const [shortcut] = this.mindMap.keyCommand.getShortcutFn('F2')
-        if (!shortcut) return
+        if (!shortcut) {
+          if (
+            this.spaceShortcutRetryFrame ||
+            this.spaceShortcutRetryCount >= 120
+          ) {
+            return
+          }
+          this.spaceShortcutRetryCount += 1
+          this.spaceShortcutRetryFrame = window.requestAnimationFrame(() => {
+            this.spaceShortcutRetryFrame = 0
+            this.enableSpaceEditShortcut()
+          })
+          return
+        }
         this.mindMap.keyCommand.extendKeyMap('Spacebar', 32)
         this.spaceEditShortcut = shortcut
+        this.spaceShortcutRetryCount = 0
       }
 
       if (this.spaceShortcutEnabled) return
@@ -294,6 +314,10 @@ export default {
     },
 
     disableSpaceEditShortcut() {
+      if (this.spaceShortcutRetryFrame) {
+        window.cancelAnimationFrame(this.spaceShortcutRetryFrame)
+        this.spaceShortcutRetryFrame = 0
+      }
       if (
         !this.mindMap ||
         !this.spaceEditShortcut ||

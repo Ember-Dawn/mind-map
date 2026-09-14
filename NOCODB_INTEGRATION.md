@@ -38,7 +38,7 @@ Example:
 /?embed=1&parentOrigin=https%3A%2F%2Fnocodb.380782744.xyz
 ```
 
-In embed mode the Web UI enables the existing `window.takeOverApp` mechanism before Vue starts. The mind-map document is supplied by the parent page instead of being loaded from the Web UI's normal localStorage document slot.
+In embed mode the Web UI uses a dedicated NocoDB adapter instead of the upstream `window.takeOverApp` document-storage path. Vue waits for `mindmap:init`; the parent-provided full document is then used directly to create the SimpleMindMap instance. Standalone mode and the upstream takeover mode remain unchanged.
 
 ## Message protocol
 
@@ -95,48 +95,53 @@ A minimal init message is:
 }
 ```
 
-`mindmap:init` may also include `config`, `language`, and `localConfig`. If omitted, embed mode keeps Web UI configuration, language, and local UI preferences in the iframe origin's localStorage; only the mind-map document itself is delegated to NocoDB.
+Language, editor configuration, and local UI preferences remain normal Web UI localStorage settings. They are not a second mind-map document store. In the SimpleMindMap constructor, the NocoDB document's `data`, `layout`, `theme`, `themeConfig`, and `viewData` are applied after general editor config so an old local config cannot override the record's saved document state.
 
 ## Initialization model
 
-The bridge waits for `mindmap:init` before starting Vue. `startApp()` also retries if `window.initApp` is not installed yet, closing the small startup race between the bridge module and `main.js`.
-
-The parent-provided document is copied into a bootstrap snapshot before the Web UI starts. `getMindMapData()` returns a deep-cloned copy of that snapshot, so the Web UI and SimpleMindMap never share the original parent object by reference.
-
-The upstream `Edit.vue` constructor already consumes `getMindMapData()` when it creates the SimpleMindMap instance. After `app_inited`, the bridge therefore only captures the live MindMap instance and binds change listeners. It deliberately does **not** call `setFullData()` a second time. This keeps initialization single-pass and avoids a second render overwriting theme, view, or node state after the first correct render.
-
-The parent keeps its loading cover visible until `mindmap:app-ready`, so the single upstream initialization finishes before the embedded editor is exposed.
-
-## Data ownership
-
-The bridge separates bootstrap data from runtime data:
+The dedicated embed bridge sets `window.nocodbMindMapEmbedMode` before Vue starts. The app waits for `mindmap:init`; no record editor is instantiated before the parent provides the full NocoDB document.
 
 ```text
 mindmap:init
-  -> deep-cloned bootstrap snapshot
-  -> Web UI creates SimpleMindMap once
-
-runtime edits
-  -> live SimpleMindMap instance
-  -> getData(true) is the authoritative current document
+  -> deep-cloned initialData
+  -> init Vue once
+  -> Edit.vue calls getData()
+  -> new MindMap({ data, layout, theme, themeConfig, viewData })
+  -> attach the live MindMap instance to the adapter
+  -> mindmap:app-ready
 ```
 
-The takeover `saveMindMapData()` hook is retained because the upstream API layer expects it, but data received through that hook is only kept as a cloned compatibility snapshot. It is not used as the authoritative document for explicit saves once the editor is running.
+Embed mode deliberately does **not** use `window.takeOverApp` for document persistence, does not merge partial document snapshots in `api/index.js`, and does not call `setFullData()` after initialization. The live SimpleMindMap instance is therefore the only runtime document state after startup.
 
-Cross-boundary mind-map data is deep-cloned when it enters the bridge, when the Web UI requests bootstrap data, and when the bridge reads the current document for save/data responses. This prevents initialization or editing code from mutating bridge-owned snapshots through shared object references.
+Standalone Web UI behavior and the upstream `window.takeOverApp` path for other integrations are preserved.
+
+## Data ownership
+
+The document has one-way ownership during startup and one authoritative runtime source:
+
+```text
+parent/NocoDB JSON
+  -> initialData snapshot
+  -> SimpleMindMap constructor
+
+runtime
+  -> live SimpleMindMap instance
+  -> mindMap.getData(true) for save/data responses
+```
+
+Normal upstream `storeData()` calls are intercepted only in NocoDB embed mode and reduced to `markDirty()`. They no longer maintain a second merged document object. This avoids theme/layout/view state being overwritten by an independent storage copy.
 
 ## Dirty tracking
 
-The bridge keeps the existing takeover `saveMindMapData()` hook, but dirty tracking does not rely on that indirect path alone.
-
-After initialization it also listens directly to the SimpleMindMap instance for:
+After initialization the adapter listens directly to the SimpleMindMap instance for:
 
 ```text
 data_change
 view_data_change
+view_theme_change
 ```
 
-A microtask-level dedupe combines a direct event and the corresponding `storeData()` callback into one revision increment, so ordinary edits reliably emit `mindmap:dirty` without double-counting the same change.
+Upstream `storeData()` calls in embed mode also reduce to `markDirty()` as a compatibility path. A microtask-level dedupe prevents one logical change from incrementing the revision multiple times in the same task.
 
 A new document can arrive with `dirty: true` in `mindmap:init`; this state is preserved through initialization so closing an unsaved new map still requires explicit save or discard.
 

@@ -10,8 +10,22 @@ const SIMPLE_MIND_MAP_LOCAL_CONFIG = 'SIMPLE_MIND_MAP_LOCAL_CONFIG'
 
 let mindMapData = null
 
+const isNocoDbEmbedMode = () => {
+  return Boolean(
+    window.nocodbMindMapEmbedMode && window.nocodbMindMapEmbed
+  )
+}
+
 // 获取缓存的思维导图数据
 export const getData = () => {
+  // NocoDB embed mode uses one parent-provided full document as startup data.
+  if (isNocoDbEmbedMode()) {
+    const data = window.nocodbMindMapEmbed.getInitialData()
+    if (!data) {
+      throw new Error('NocoDB embed data is not ready')
+    }
+    return data
+  }
   // 接管模式
   if (window.takeOverApp) {
     mindMapData = window.takeOverAppMethods.getMindMapData()
@@ -36,6 +50,13 @@ export const getData = () => {
 // 存储思维导图数据
 export const storeData = data => {
   try {
+    // In NocoDB embed mode, SimpleMindMap itself is the only live document.
+    // Upstream partial storeData() calls only mark the document dirty; explicit
+    // saving always reads mindMap.getData(true) through the embed adapter.
+    if (isNocoDbEmbedMode()) {
+      window.nocodbMindMapEmbed.markDirty()
+      return
+    }
     let originData = null
     if (window.takeOverApp) {
       originData = mindMapData

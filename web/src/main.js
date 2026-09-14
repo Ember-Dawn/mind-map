@@ -29,8 +29,12 @@ const initApp = () => {
   }).$mount('#app')
 }
 
-// 是否处于接管应用模式
-if (window.takeOverApp) {
+// NocoDB embed mode waits for the parent to provide record data before Vue starts.
+if (window.nocodbMindMapEmbedMode) {
+  window.initApp = initApp
+  window.$bus = bus
+} else if (window.takeOverApp) {
+  // Keep the upstream takeover mode for non-NocoDB integrations.
   window.initApp = initApp
   window.$bus = bus
 } else {

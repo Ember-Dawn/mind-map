@@ -3,9 +3,6 @@ const isEmbedMode = params.get('embed') === '1'
 
 if (isEmbedMode) {
   const parentOrigin = params.get('parentOrigin') || '*'
-  const CONFIG_KEY = 'NOCODB_MINDMAP_CONFIG'
-  const LANG_KEY = 'NOCODB_MINDMAP_LANG'
-  const LOCAL_CONFIG_KEY = 'NOCODB_MINDMAP_LOCAL_CONFIG'
 
   const cloneJson = value => {
     if (value === null || value === undefined) return value
@@ -19,33 +16,21 @@ if (isEmbedMode) {
     return JSON.parse(JSON.stringify(value))
   }
 
-  const readJson = key => {
-    try {
-      const value = localStorage.getItem(key)
-      return value ? JSON.parse(value) : null
-    } catch (error) {
-      console.warn('[NocoDB MindMap Bridge] Failed to read local config:', error)
-      return null
-    }
-  }
-
   const state = {
     initialized: false,
     appStarted: false,
     startTimer: null,
     dirtyMarkQueued: false,
     mindMap: null,
-    bootstrapData: null,
-    latestStoredData: null,
-    mindMapConfig: readJson(CONFIG_KEY),
-    language: localStorage.getItem(LANG_KEY) || 'zh',
-    localConfig: readJson(LOCAL_CONFIG_KEY),
+    initialData: null,
     dirty: false,
     initialDirty: false,
     revision: 0,
     lastSaveRequestId: 0,
     pendingSaves: new Map()
   }
+
+  window.nocodbMindMapEmbedMode = true
 
   // Avoid the standalone Web trial prompt when the app is embedded in NocoDB.
   localStorage.setItem('webUseTip', '1')
@@ -67,7 +52,7 @@ if (isEmbedMode) {
     if (state.mindMap && typeof state.mindMap.getData === 'function') {
       return cloneJson(state.mindMap.getData(true))
     }
-    return cloneJson(state.bootstrapData)
+    return cloneJson(state.initialData)
   }
 
   const setDirty = dirty => {
@@ -88,9 +73,9 @@ if (isEmbedMode) {
     })
   }
 
-  const requestSave = () => {
-    const data = getCurrentData()
-    if (!data) return
+  const requestSave = data => {
+    const currentData = data ? cloneJson(data) : getCurrentData()
+    if (!currentData) return
 
     state.lastSaveRequestId += 1
     const requestId = state.lastSaveRequestId
@@ -98,69 +83,36 @@ if (isEmbedMode) {
     postToParent('mindmap:save', {
       requestId,
       revision: state.revision,
-      data
+      data: currentData
     })
   }
 
-  window.takeOverApp = true
-  window.takeOverAppMethods = {
-    getMindMapData() {
-      // The Web UI receives its own snapshot so SimpleMindMap cannot mutate the
-      // bridge's parent-provided bootstrap object by reference during startup.
-      return cloneJson(state.bootstrapData)
+  const attachMindMap = mindMap => {
+    if (!mindMap || state.initialized) return
+    state.mindMap = mindMap
+
+    if (typeof mindMap.on === 'function') {
+      mindMap.on('data_change', markDirty)
+      mindMap.on('view_data_change', markDirty)
+      mindMap.on('view_theme_change', markDirty)
+    }
+
+    state.initialized = true
+    state.dirty = state.initialDirty
+    state.revision = 0
+    postToParent('mindmap:app-ready')
+    if (state.dirty) {
+      postToParent('mindmap:dirty', { dirty: true })
+    }
+  }
+
+  window.nocodbMindMapEmbed = {
+    getInitialData() {
+      return cloneJson(state.initialData)
     },
-    saveMindMapData(data) {
-      // Keep this hook for the upstream API/storeData takeover contract, but do
-      // not use it as the authoritative runtime document. Once initialized,
-      // mindMap.getData(true) is the only source used for explicit saves.
-      state.latestStoredData = cloneJson(data)
-      markDirty()
-    },
-    getMindMapConfig() {
-      return cloneJson(state.mindMapConfig)
-    },
-    saveMindMapConfig(config) {
-      state.mindMapConfig = cloneJson(config)
-      localStorage.setItem(CONFIG_KEY, JSON.stringify(config || {}))
-    },
-    getLanguage() {
-      return state.language || 'zh'
-    },
-    saveLanguage(language) {
-      state.language = language || 'zh'
-      localStorage.setItem(LANG_KEY, state.language)
-    },
-    getLocalConfig() {
-      return cloneJson(state.localConfig)
-    },
-    saveLocalConfig(config) {
-      state.localConfig = cloneJson(config)
-      localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(config || {}))
-    },
+    attachMindMap,
+    markDirty,
     requestSave
-  }
-
-  const finishAppInit = mindMap => {
-    state.mindMap = mindMap || state.mindMap
-
-    // Do not call setFullData() here. The upstream Edit.vue constructor already
-    // consumed getMindMapData() when it created SimpleMindMap. Applying the same
-    // document again after app_inited causes a second render and can overwrite
-    // theme/view state with data mutated during the first initialization.
-    window.requestAnimationFrame(() => {
-      if (state.mindMap && typeof state.mindMap.on === 'function') {
-        state.mindMap.on('data_change', markDirty)
-        state.mindMap.on('view_data_change', markDirty)
-      }
-
-      state.initialized = true
-      state.dirty = state.initialDirty
-      state.revision = 0
-      postToParent('mindmap:app-ready')
-      if (state.dirty) {
-        postToParent('mindmap:dirty', { dirty: true })
-      }
-    })
   }
 
   const startApp = () => {
@@ -176,20 +128,7 @@ if (isEmbedMode) {
     }
 
     state.appStarted = true
-
-    if (window.$bus) {
-      window.$bus.$once('app_inited', mindMap => {
-        finishAppInit(mindMap)
-      })
-    }
-
     window.initApp()
-
-    if (!window.$bus) {
-      window.setTimeout(() => {
-        finishAppInit(null)
-      }, 0)
-    }
   }
 
   const handleMessage = event => {
@@ -201,12 +140,9 @@ if (isEmbedMode) {
 
     switch (message.type) {
       case 'mindmap:init':
+        if (state.appStarted) return
         if (!message.data || typeof message.data !== 'object') return
-        state.bootstrapData = cloneJson(message.data)
-        state.latestStoredData = cloneJson(message.data)
-        if (message.config) state.mindMapConfig = cloneJson(message.config)
-        if (message.language) state.language = message.language
-        if (message.localConfig) state.localConfig = cloneJson(message.localConfig)
+        state.initialData = cloneJson(message.data)
         state.initialDirty = Boolean(message.dirty)
         state.dirty = state.initialDirty
         state.revision = 0
@@ -242,20 +178,10 @@ if (isEmbedMode) {
   }
 
   window.addEventListener('message', handleMessage)
-  window.addEventListener(
-    'keydown',
-    event => {
-      const key = String(event.key || '').toLowerCase()
-      if ((event.ctrlKey || event.metaKey) && key === 's') {
-        event.preventDefault()
-        requestSave()
-      }
-    },
-    true
-  )
 
-  // main.js installs window.initApp after imports complete. The ready signal lets
-  // the parent send mindmap:init only after this bridge is available.
+  // The parent can send mindmap:init after this signal. Vue is intentionally not
+  // started until that message arrives, so upstream example/local document data
+  // can never render before the NocoDB record document.
   window.setTimeout(() => {
     postToParent('mindmap:ready')
   }, 0)

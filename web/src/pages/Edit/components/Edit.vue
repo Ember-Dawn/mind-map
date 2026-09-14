@@ -329,6 +329,10 @@ export default {
 
     // 手动保存
     manualSave() {
+      if (window.nocodbMindMapEmbedMode && window.nocodbMindMapEmbed) {
+        window.nocodbMindMapEmbed.requestSave(this.mindMap.getData(true))
+        return
+      }
       storeData(this.mindMap.getData(true))
     },
 
@@ -350,6 +354,7 @@ export default {
         view = null
       }
       this.mindMap = new MindMap({
+        ...(config || {}),
         el: this.$refs.mindMapContainer,
         data: root,
         fit: false,
@@ -372,7 +377,6 @@ export default {
         demonstrateConfig: {
           openBlankMode: false
         },
-        ...(config || {}),
         iconList: [...icon],
         useLeftKeySelectionRightKeyDrag: this.useLeftKeySelectionRightKeyDrag,
         customInnerElsAppendTo: null,
@@ -483,10 +487,14 @@ export default {
           this.$bus.$emit(event, ...args)
         })
       })
-      this.bindSaveEvent()
-      // 如果应用被接管，那么抛出事件传递思维导图实例
-      if (window.takeOverApp) {
-        this.$bus.$emit('app_inited', this.mindMap)
+      if (window.nocodbMindMapEmbedMode && window.nocodbMindMapEmbed) {
+        window.nocodbMindMapEmbed.attachMindMap(this.mindMap)
+      } else {
+        this.bindSaveEvent()
+        // 如果应用被接管，那么抛出事件传递思维导图实例
+        if (window.takeOverApp) {
+          this.$bus.$emit('app_inited', this.mindMap)
+        }
       }
       // 解析url中的文件
       if (hasFileURL) {
@@ -527,7 +535,11 @@ export default {
         rootNodeData = data
       }
       this.mindMap.view.reset()
-      this.manualSave()
+      if (window.nocodbMindMapEmbedMode && window.nocodbMindMapEmbed) {
+        window.nocodbMindMapEmbed.markDirty()
+      } else {
+        this.manualSave()
+      }
       // 如果导入的是富文本内容，那么自动开启富文本模式
       if (rootNodeData.data.richText && !this.openNodeRichText) {
         this.$bus.$emit('toggleOpenNodeRichText', true)

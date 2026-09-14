@@ -20,12 +20,15 @@ if (isEmbedMode) {
   const state = {
     initialized: false,
     appStarted: false,
+    startTimer: null,
+    dirtyMarkQueued: false,
     mindMap: null,
     mindMapData: null,
     mindMapConfig: readJson(CONFIG_KEY),
     language: localStorage.getItem(LANG_KEY) || 'zh',
     localConfig: readJson(LOCAL_CONFIG_KEY),
     dirty: false,
+    initialDirty: false,
     revision: 0,
     lastSaveRequestId: 0,
     pendingSaves: new Map()
@@ -61,6 +64,17 @@ if (isEmbedMode) {
     postToParent('mindmap:dirty', { dirty: state.dirty })
   }
 
+  const markDirty = () => {
+    if (!state.initialized || state.dirtyMarkQueued) return
+    state.dirtyMarkQueued = true
+    queueMicrotask(() => {
+      state.dirtyMarkQueued = false
+      if (!state.initialized) return
+      state.revision += 1
+      setDirty(true)
+    })
+  }
+
   const requestSave = () => {
     const data = getCurrentData()
     if (!data) return
@@ -82,10 +96,7 @@ if (isEmbedMode) {
     },
     saveMindMapData(data) {
       state.mindMapData = data
-      if (state.initialized) {
-        state.revision += 1
-        setDirty(true)
-      }
+      markDirty()
     },
     getMindMapConfig() {
       return state.mindMapConfig
@@ -111,15 +122,50 @@ if (isEmbedMode) {
     requestSave
   }
 
+  const finishAppInit = mindMap => {
+    state.mindMap = mindMap || state.mindMap
+
+    if (
+      state.mindMap &&
+      state.mindMapData &&
+      typeof state.mindMap.setFullData === 'function'
+    ) {
+      state.mindMap.setFullData(state.mindMapData)
+    }
+
+    window.requestAnimationFrame(() => {
+      if (state.mindMap && typeof state.mindMap.on === 'function') {
+        state.mindMap.on('data_change', markDirty)
+        state.mindMap.on('view_data_change', markDirty)
+      }
+
+      state.initialized = true
+      state.dirty = state.initialDirty
+      state.revision = 0
+      postToParent('mindmap:app-ready')
+      if (state.dirty) {
+        postToParent('mindmap:dirty', { dirty: true })
+      }
+    })
+  }
+
   const startApp = () => {
-    if (state.appStarted || typeof window.initApp !== 'function') return
+    if (state.appStarted) return
+    if (typeof window.initApp !== 'function') {
+      if (!state.startTimer) {
+        state.startTimer = window.setTimeout(() => {
+          state.startTimer = null
+          startApp()
+        }, 0)
+      }
+      return
+    }
+
     state.appStarted = true
 
     if (window.$bus) {
       window.$bus.$once('app_inited', mindMap => {
-        state.mindMap = mindMap
-        state.initialized = true
-        postToParent('mindmap:app-ready')
+        finishAppInit(mindMap)
       })
     }
 
@@ -127,8 +173,7 @@ if (isEmbedMode) {
 
     if (!window.$bus) {
       window.setTimeout(() => {
-        state.initialized = true
-        postToParent('mindmap:app-ready')
+        finishAppInit(null)
       }, 0)
     }
   }
@@ -147,7 +192,8 @@ if (isEmbedMode) {
         if (message.config) state.mindMapConfig = message.config
         if (message.language) state.language = message.language
         if (message.localConfig) state.localConfig = message.localConfig
-        state.dirty = false
+        state.initialDirty = Boolean(message.dirty)
+        state.dirty = state.initialDirty
         state.revision = 0
         startApp()
         break

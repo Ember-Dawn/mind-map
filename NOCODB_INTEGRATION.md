@@ -2,12 +2,19 @@
 
 This fork keeps the upstream Web UI and adds a lightweight embed bridge for the NocoDB userscript integration.
 
-## Development deployment
+## Deployment
 
-The repository runs as a single development container with Vue HMR enabled.
+The public WebUI no longer runs directly from webpack-dev-server. The repository now uses two Docker services:
 
-```bash
-docker compose up -d --build
+```text
+mind-map-builder
+  -> watches WebUI source
+  -> runs a production Vue build
+  -> publishes a complete static release under /site
+
+mind-map
+  -> nginx
+  -> serves /site/current on port 80
 ```
 
 The service is exposed on the host at:
@@ -22,9 +29,54 @@ Recommended Cloudflare Tunnel target:
 http://localhost:9871
 ```
 
-The repository is bind-mounted into the container so edits under `web/src/` are visible immediately. `/app/web/node_modules` is stored in the Docker named volume `mind-map-node-modules`. On first start, the container runs `npm ci` automatically if `node_modules/.bin/vue-cli-service` is missing.
+Initial deployment or any Docker/Compose configuration change requires rebuilding the containers:
 
-The development server is published through `https://mindmap.380782744.xyz`. Because TLS terminates at Cloudflare while webpack-dev-server itself still listens on plain HTTP inside the container, `web/vue.config.js` explicitly tells the webpack-dev-server v3 client to use the public HTTPS host for SockJS/HMR instead of `localhost:8080`. Development responses also send `Cache-Control: no-store` and use filename hashing in development so a browser, Cloudflare edge, or iframe reload does not keep reusing a stale fixed `/js/app.js`. The defaults can be overridden with `MIND_MAP_DEV_PUBLIC_HOST` and `MIND_MAP_DEV_PUBLIC_URL` if the public development hostname changes.
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+After that, normal WebUI source updates do not require a container restart. `mind-map-builder` watches:
+
+```text
+web/src/
+web/public/
+web/vue.config.js
+```
+
+When one of those paths changes, `web/scripts/static-watch.js` debounces the events, runs a production Vue build, copies the complete build to a new release directory, writes `build.json`, and atomically switches `/site/current` to the new release. Nginx keeps serving the previous successful release while a new build is running, so a failed build does not replace the working site with a partial or broken release.
+
+This is **automatic rebuild + automatic publish**, not browser HMR. An already-open standalone page or NocoDB iframe continues running the JavaScript bundle it originally loaded. After `build published` appears in the builder log, refresh the standalone WebUI or close and reopen the NocoDB MindMap modal to load the new release.
+
+Useful commands:
+
+```bash
+docker compose logs -f mind-map-builder
+```
+
+A successful build ends with a message similar to:
+
+```text
+[static-build] ... build published in 18.4s
+```
+
+The currently served release exposes:
+
+```text
+/build.json
+```
+
+Its `builtAt` timestamp is a simple way to verify that the public site has switched to a newly published build.
+
+The production bundles use hashed filenames and nginx sends `Cache-Control: no-store` headers. This avoids the earlier failure mode where GitHub and the container source were current but the browser still executed an old fixed-name bundle.
+
+The builder currently uses Node 20 with the repository's Vue CLI 4 / webpack 4 toolchain. Because webpack 4's production minification path is not natively compatible with OpenSSL 3, the builder container sets:
+
+```text
+NODE_OPTIONS=--openssl-legacy-provider
+```
+
+Do not remove this compatibility option unless the frontend build toolchain is upgraded and a production build has been verified without it.
 
 ## Embed URL
 
@@ -191,7 +243,7 @@ The userscript preconnects to the MindMap origin and creates a persistent off-sc
 
 The parent also has recovery timers: if the adopted iframe does not answer the handshake, or if it answers but does not reach `mindmap:app-ready` after initialization, the userscript replaces it with one fresh iframe and retries once. A second failure is surfaced as an explicit WebUI initialization error instead of leaving the loading cover forever. After a modal closes, a new off-screen iframe is prepared for the following open.
 
-The current deployment still uses Vue Dev Server for hot reload. Its HMR client is configured for the Cloudflare-facing public host, so browser sessions opened through `https://mindmap.380782744.xyz` connect back through `/sockjs-node` on port 443 instead of attempting to reach the browser machine's `localhost:8080`. A future production build served by nginx can reduce cold-start overhead further.
+The current public deployment serves production-built hashed assets through nginx. The builder publishes a release only after the entire Vue build succeeds, and the `/site/current` symlink is switched atomically. Existing browser tabs and already-open iframes are not forcibly reloaded when a release is published; reload or reopen them after `build published` when testing new frontend behavior.
 
 ## Repository responsibilities
 
@@ -206,12 +258,37 @@ The NocoDB userscript owns:
 - explicit save and close confirmation;
 - validating the iframe origin before accepting messages.
 
-The existing root `nginx.conf`, `dist/`, and production-style static deployment files are retained for upstream compatibility, while the provided `docker-compose.yml` uses the Vue development server for hot reload.
+The root `Dockerfile`, `docker-compose.yml`, `nginx.conf`, and `web/scripts/static-watch.js` implement the current production-style auto-build/static-serving deployment. The upstream-style `dist/` and other production-compatible files remain in the repository where needed, but the public service no longer depends on webpack-dev-server/HMR.
 
 ## Node-edit shortcut
 
-Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior and `Space` reuses the **same callback registered for `F2` by the live SimpleMindMap instance**. The WebUI explicitly extends the runtime key map with `Spacebar = 32` and registers that F2 callback through SimpleMindMap's own `keyCommand` system. This is the same runtime path that was verified manually in the browser console.
+Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior. `Space` is implemented as a thin adapter in `Edit.vue`; it does **not** maintain a separate node-edit implementation.
 
-The F2 callback is not guaranteed to be present at the exact moment `Edit.vue` first finishes constructing the MindMap instance. If the initial lookup returns no F2 callback, the WebUI retries on animation frames for a bounded period (up to 120 attempts) and registers Space as soon as F2 becomes available. This prevents the runtime state where `F2` is available later but `Space` remains unregistered because the one-time startup attempt returned too early.
+When a plain Space keydown is received, the adapter only acts when exactly one node is selected, no text editor is already open, no modifier key is held, the key is not an IME composition/repeat event, and focus is not inside an input, textarea, select, or contenteditable element. It then synchronously calls `preventDefault()`, `stopPropagation()`, and `stopImmediatePropagation()` so the printable Space event cannot reach the text editor or the normal shortcut chain.
 
-The Space shortcut is removed on `before_show_text_edit` and restored on `hide_text_edit`. Therefore Space can open the selected node editor while the canvas is active, but once text editing begins, Space is no longer a global shortcut and remains normal text input. Any pending startup retry is cancelled while editing and on component destruction. This avoids maintaining a parallel window-level keyboard dispatcher and keeps F2/Space behavior inside SimpleMindMap's existing shortcut checks.
+The adapter waits until the next animation frame and then re-checks the selection/editing state. It retrieves the **current runtime F2 callback** from `mindMap.keyCommand.getShortcutFn('F2')` and calls that callback. Therefore the edit operation itself still follows SimpleMindMap's own installed F2 behavior, but it runs after the original printable Space key event has completely finished.
+
+This delay is important. A previous implementation registered the F2 callback directly under `Spacebar` in SimpleMindMap's `keyCommand` map. That made Space open the editor, but because Space is a printable key, the same keydown could affect the newly created text editor. The visible symptom was that the editor/text first appeared near the page's upper-left corner and moved back to the selected node after the next typed character triggered a fresh measurement/render. Separating the printable Space event from the F2 callback by one animation frame removes that positioning glitch.
+
+## Maintenance notes and known pitfalls
+
+The following points were verified during the NocoDB/Space integration work and should be treated as maintenance constraints rather than rediscovered assumptions:
+
+- **Source freshness must be verified at runtime.** During earlier debugging, GitHub and the bind-mounted source contained new methods while the browser's Vue instance did not. Console checks such as `typeof document.querySelector('.editContainer')?.__vue__?.<method>` exposed that the page was still executing an old bundle. Do not conclude that a new shortcut implementation is broken until the served build is confirmed current.
+- **The old webpack-dev-server deployment could obscure version state.** Cloudflare, iframe prewarming, fixed/static bundle URLs, and an already-open page made it possible to keep exercising an old runtime even after source changes. The current hashed production build + atomic nginx deployment was introduced to remove that ambiguity.
+- **A successful source update is not the same as a successful publish.** Wait for `[static-build] ... build published ...` before testing. While a build is running, nginx intentionally keeps serving the last successful release. If a build fails, the previous release remains live.
+- **Open pages do not hot-reload.** The current architecture automatically rebuilds and publishes, but does not replace JavaScript inside an already-open tab or iframe. Refresh standalone pages and reopen the NocoDB modal before testing a newly published frontend change.
+- **Do not map printable Space directly to the F2 callback synchronously.** It works functionally but can corrupt the first text-editor positioning pass. Keep the current `preventDefault` + next-animation-frame F2 callback design unless the underlying SimpleMindMap input lifecycle changes and is re-tested.
+- **Do not replace the runtime F2 callback with a custom `textEdit.show()` implementation without a concrete reason.** Reusing `getShortcutFn('F2')` keeps Space aligned with upstream editing behavior and reduces maintenance drift.
+- **Node 20 + webpack 4 production builds need the OpenSSL compatibility option in the current toolchain.** Removing `NODE_OPTIONS=--openssl-legacy-provider` reproduces `error:0308010C:digital envelope routines::unsupported` during Terser minification. Re-evaluate this only after upgrading the frontend build stack.
+- **The userscript does not need a Space-specific change.** Space editing is owned by this WebUI repository. The userscript remains responsible for NocoDB context, iframe lifecycle/prewarm, messaging, API access, and persistence.
+
+When debugging future frontend changes, prefer this order:
+
+```text
+1. confirm source file changed
+2. confirm builder log reached "build published"
+3. check /build.json builtAt
+4. refresh standalone WebUI / reopen NocoDB modal
+5. inspect the live Vue instance or shortcut map only after the new build is definitely loaded
+```

@@ -13,6 +13,7 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       STATIC_OUTPUT_DIR: /site
+      NODE_OPTIONS: --openssl-legacy-provider
     restart: unless-stopped
 
   mind-map:

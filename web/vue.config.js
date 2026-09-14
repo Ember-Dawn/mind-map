@@ -13,7 +13,7 @@ module.exports = {
   outputDir: '../dist',
   lintOnSave: false,
   productionSourceMap: false,
-  filenameHashing: isDev,
+  filenameHashing: true,
   transpileDependencies: ['yjs', 'lib0', 'quill'],
   chainWebpack: config => {
     // 移除 preload 插件

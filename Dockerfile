@@ -1,7 +1,9 @@
-FROM node:20-bookworm-slim
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app/web
 
-EXPOSE 8080
+CMD ["sh", "-c", "if [ ! -x node_modules/.bin/vue-cli-service ]; then npm ci; fi && node scripts/static-watch.js"]
 
-CMD ["sh", "-c", "if [ ! -x node_modules/.bin/vue-cli-service ]; then npm ci; fi && npm run serve -- --host 0.0.0.0 --port 8080"]
+FROM nginx:1.27-alpine AS server
+
+COPY nginx.conf /etc/nginx/nginx.conf

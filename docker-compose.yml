@@ -1,19 +1,34 @@
 services:
+  mind-map-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: mind-map-builder
+    working_dir: /app/web
+    volumes:
+      - ./:/app:ro
+      - mind-map-node-modules:/app/web/node_modules
+      - mind-map-static-site:/site
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      STATIC_OUTPUT_DIR: /site
+    restart: unless-stopped
+
   mind-map:
     build:
       context: .
       dockerfile: Dockerfile
+      target: server
     container_name: mind-map
-    working_dir: /app/web
     ports:
-      - "9871:8080"
+      - "9871:80"
     volumes:
-      - ./:/app
-      - mind-map-node-modules:/app/web/node_modules
-    environment:
-      CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING: "true"
+      - mind-map-static-site:/site:ro
+    depends_on:
+      - mind-map-builder
     restart: unless-stopped
 
 volumes:
   mind-map-node-modules:
+  mind-map-static-site:

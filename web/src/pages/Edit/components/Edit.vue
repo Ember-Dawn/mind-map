@@ -243,9 +243,6 @@ export default {
     this.$bus.$on('showLoading', this.handleShowLoading)
     this.$bus.$on('localStorageExceeded', this.onLocalStorageExceeded)
     window.addEventListener('resize', this.handleResize)
-    if (window.nocodbMindMapEmbedMode) {
-      window.addEventListener('keydown', this.handleEmbedSpaceEdit, true)
-    }
     this.$bus.$on('showDownloadTip', this.showDownloadTip)
     this.webTip()
   },
@@ -262,7 +259,6 @@ export default {
     this.$bus.$off('showLoading', this.handleShowLoading)
     this.$bus.$off('localStorageExceeded', this.onLocalStorageExceeded)
     window.removeEventListener('resize', this.handleResize)
-    window.removeEventListener('keydown', this.handleEmbedSpaceEdit, true)
     this.$bus.$off('showDownloadTip', this.showDownloadTip)
     this.mindMap.destroy()
   },
@@ -280,29 +276,29 @@ export default {
       this.mindMap.renderer.startTextEdit()
     },
 
-    handleEmbedSpaceEdit(event) {
+    handleEmbedSpaceEdit() {
       if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
-      if (event.code !== 'Space' && event.key !== ' ') return
-      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
-
-      const target = event.target
-      if (
-        target &&
-        (target.matches?.('input, textarea, select, [contenteditable="true"]') ||
-          target.closest?.('[contenteditable="true"]'))
-      ) {
-        return
-      }
-
       const renderer = this.mindMap.renderer
       if (!renderer || renderer.activeNodeList.length !== 1) return
-      if (renderer.textEdit && renderer.textEdit.isShowTextEdit()) return
-
-      event.preventDefault()
-      event.stopPropagation()
       renderer.textEdit.show({
         node: renderer.activeNodeList[0]
       })
+    },
+
+    enableEmbedSpaceShortcut() {
+      if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
+      this.mindMap.keyCommand.addShortcut(
+        'Spacebar',
+        this.handleEmbedSpaceEdit
+      )
+    },
+
+    disableEmbedSpaceShortcut() {
+      if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
+      this.mindMap.keyCommand.removeShortcut(
+        'Spacebar',
+        this.handleEmbedSpaceEdit
+      )
     },
 
     handleEndTextEdit() {
@@ -483,6 +479,11 @@ export default {
       this.mindMap.keyCommand.addShortcut('Control+s', () => {
         this.manualSave()
       })
+      if (window.nocodbMindMapEmbedMode) {
+        this.enableEmbedSpaceShortcut()
+        this.mindMap.on('before_show_text_edit', this.disableEmbedSpaceShortcut)
+        this.mindMap.on('hide_text_edit', this.enableEmbedSpaceShortcut)
+      }
       // 转发事件
       ;[
         'node_active',

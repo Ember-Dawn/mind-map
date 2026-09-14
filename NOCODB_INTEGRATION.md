@@ -62,7 +62,7 @@ Web UI messages:
 
 ### Web UI -> parent
 
-- `mindmap:ready`: bridge is loaded; parent can send initial data.
+- `mindmap:ready`: bridge is loaded and available. It is emitted on startup and also in response to `mindmap:hello`, so a prewarmed iframe can be adopted later without losing the one-time startup signal.
 - `mindmap:app-ready`: Vue and SimpleMindMap are initialized from the parent-provided full data.
 - `mindmap:dirty`: `{ dirty, revision }`; emitted after initialization when the live document changes. Repeated edits while already dirty still emit the new revision so auto-save debounce can restart.
 - `mindmap:save`: `{ requestId, revision, data }`; explicit save request. `Ctrl/Cmd + S` triggers this message.
@@ -71,6 +71,7 @@ Web UI messages:
 
 ### Parent -> Web UI
 
+- `mindmap:hello`: reusable readiness handshake. The bridge replies with `mindmap:ready` every time it receives a valid hello.
 - `mindmap:init`: supplies the initial full SimpleMindMap data and starts the app. The NocoDB userscript normally sends `dirty: false`; initialization itself never makes the document dirty.
 - `mindmap:request-save`: asks the Web UI to send its latest `getData(true)` through `mindmap:save`.
 - `mindmap:request-data`: asks the Web UI to return current data without saving.
@@ -84,7 +85,7 @@ A minimal init message is:
   type: 'mindmap:init',
   dirty: false,
   data: {
-    layout: 'mindMap',
+    layout: 'logicalStructure',
     root: {},
     theme: {
       template: 'classic15',
@@ -99,9 +100,11 @@ Language, editor configuration, and local UI preferences remain normal Web UI lo
 
 ## Initialization model
 
-The dedicated embed bridge sets `window.nocodbMindMapEmbedMode` before Vue starts. The app waits for `mindmap:init`; no record editor is instantiated before the parent provides the full NocoDB document.
+The dedicated embed bridge sets `window.nocodbMindMapEmbedMode` before Vue starts. A parent that adopts a prewarmed iframe first sends `mindmap:hello`; the bridge responds with `mindmap:ready`, after which the parent can safely send `mindmap:init`. The app still waits for `mindmap:init`; no record editor is instantiated before the parent provides the full NocoDB document.
 
 ```text
+parent -> mindmap:hello
+bridge -> mindmap:ready
 mindmap:init
   -> deep-cloned initialData
   -> init Vue once
@@ -182,7 +185,9 @@ theme.template = classic15
 
 ## Performance
 
-The userscript preconnects to the MindMap origin and creates a persistent off-screen embed iframe while the NocoDB page is idle. It does not send `mindmap:init`, so no record editor is created, but the Web UI document and modules are already loaded. On the next open the same ready iframe is moved into the modal instead of creating a second iframe. After that modal closes, a new off-screen iframe is prepared for the following open.
+The userscript preconnects to the MindMap origin and creates a persistent off-screen embed iframe while the NocoDB page is idle. It does not send `mindmap:init`, so no record editor is created, but the Web UI document and modules are already loaded. On the next open the same iframe is moved into the modal and the parent actively performs a `mindmap:hello` -> `mindmap:ready` handshake. This avoids relying on a startup-only ready event that may have fired long before the modal existed.
+
+The parent also has recovery timers: if the adopted iframe does not answer the handshake, or if it answers but does not reach `mindmap:app-ready` after initialization, the userscript replaces it with one fresh iframe and retries once. A second failure is surfaced as an explicit WebUI initialization error instead of leaving the loading cover forever. After a modal closes, a new off-screen iframe is prepared for the following open.
 
 The current deployment still uses Vue Dev Server for hot reload. A future production build served by nginx can reduce cold-start overhead further.
 
@@ -203,4 +208,4 @@ The existing root `nginx.conf`, `dist/`, and production-style static deployment 
 
 ## Embed-only shortcut
 
-In NocoDB embed mode, `F2` keeps its upstream behavior and `Space` is added as a second way to edit the currently selected single node. The Space handler is disabled while an input/textarea/contenteditable editor is focused, so normal spaces inside node text are unaffected.
+In NocoDB embed mode, `F2` keeps its upstream behavior and `Space` is added through SimpleMindMap's own `keyCommand` system (`Spacebar` in the library key map) as a second way to edit the currently selected single node. The embed shortcut is temporarily removed on `before_show_text_edit` and restored on `hide_text_edit`, so pressing Space inside the node editor remains normal text input.

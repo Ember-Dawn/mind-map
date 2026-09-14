@@ -213,6 +213,9 @@ if (isEmbedMode) {
     if (!message || message.source !== 'nocodb-mindmap') return
 
     switch (message.type) {
+      case 'mindmap:hello':
+        postToParent('mindmap:ready')
+        break
       case 'mindmap:init':
         if (state.appStarted) return
         if (!message.data || typeof message.data !== 'object') return

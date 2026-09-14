@@ -7,6 +7,18 @@ if (isEmbedMode) {
   const LANG_KEY = 'NOCODB_MINDMAP_LANG'
   const LOCAL_CONFIG_KEY = 'NOCODB_MINDMAP_LOCAL_CONFIG'
 
+  const cloneJson = value => {
+    if (value === null || value === undefined) return value
+    if (typeof structuredClone === 'function') {
+      try {
+        return structuredClone(value)
+      } catch (error) {
+        console.warn('[NocoDB MindMap Bridge] structuredClone failed:', error)
+      }
+    }
+    return JSON.parse(JSON.stringify(value))
+  }
+
   const readJson = key => {
     try {
       const value = localStorage.getItem(key)
@@ -23,7 +35,8 @@ if (isEmbedMode) {
     startTimer: null,
     dirtyMarkQueued: false,
     mindMap: null,
-    mindMapData: null,
+    bootstrapData: null,
+    latestStoredData: null,
     mindMapConfig: readJson(CONFIG_KEY),
     language: localStorage.getItem(LANG_KEY) || 'zh',
     localConfig: readJson(LOCAL_CONFIG_KEY),
@@ -52,9 +65,9 @@ if (isEmbedMode) {
 
   const getCurrentData = () => {
     if (state.mindMap && typeof state.mindMap.getData === 'function') {
-      state.mindMapData = state.mindMap.getData(true)
+      return cloneJson(state.mindMap.getData(true))
     }
-    return state.mindMapData
+    return cloneJson(state.bootstrapData)
   }
 
   const setDirty = dirty => {
@@ -92,17 +105,22 @@ if (isEmbedMode) {
   window.takeOverApp = true
   window.takeOverAppMethods = {
     getMindMapData() {
-      return state.mindMapData
+      // The Web UI receives its own snapshot so SimpleMindMap cannot mutate the
+      // bridge's parent-provided bootstrap object by reference during startup.
+      return cloneJson(state.bootstrapData)
     },
     saveMindMapData(data) {
-      state.mindMapData = data
+      // Keep this hook for the upstream API/storeData takeover contract, but do
+      // not use it as the authoritative runtime document. Once initialized,
+      // mindMap.getData(true) is the only source used for explicit saves.
+      state.latestStoredData = cloneJson(data)
       markDirty()
     },
     getMindMapConfig() {
-      return state.mindMapConfig
+      return cloneJson(state.mindMapConfig)
     },
     saveMindMapConfig(config) {
-      state.mindMapConfig = config
+      state.mindMapConfig = cloneJson(config)
       localStorage.setItem(CONFIG_KEY, JSON.stringify(config || {}))
     },
     getLanguage() {
@@ -113,10 +131,10 @@ if (isEmbedMode) {
       localStorage.setItem(LANG_KEY, state.language)
     },
     getLocalConfig() {
-      return state.localConfig
+      return cloneJson(state.localConfig)
     },
     saveLocalConfig(config) {
-      state.localConfig = config
+      state.localConfig = cloneJson(config)
       localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(config || {}))
     },
     requestSave
@@ -125,14 +143,10 @@ if (isEmbedMode) {
   const finishAppInit = mindMap => {
     state.mindMap = mindMap || state.mindMap
 
-    if (
-      state.mindMap &&
-      state.mindMapData &&
-      typeof state.mindMap.setFullData === 'function'
-    ) {
-      state.mindMap.setFullData(state.mindMapData)
-    }
-
+    // Do not call setFullData() here. The upstream Edit.vue constructor already
+    // consumed getMindMapData() when it created SimpleMindMap. Applying the same
+    // document again after app_inited causes a second render and can overwrite
+    // theme/view state with data mutated during the first initialization.
     window.requestAnimationFrame(() => {
       if (state.mindMap && typeof state.mindMap.on === 'function') {
         state.mindMap.on('data_change', markDirty)
@@ -188,10 +202,11 @@ if (isEmbedMode) {
     switch (message.type) {
       case 'mindmap:init':
         if (!message.data || typeof message.data !== 'object') return
-        state.mindMapData = message.data
-        if (message.config) state.mindMapConfig = message.config
+        state.bootstrapData = cloneJson(message.data)
+        state.latestStoredData = cloneJson(message.data)
+        if (message.config) state.mindMapConfig = cloneJson(message.config)
         if (message.language) state.language = message.language
-        if (message.localConfig) state.localConfig = message.localConfig
+        if (message.localConfig) state.localConfig = cloneJson(message.localConfig)
         state.initialDirty = Boolean(message.dirty)
         state.dirty = state.initialDirty
         state.revision = 0

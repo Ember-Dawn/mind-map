@@ -63,7 +63,7 @@ Web UI messages:
 ### Web UI -> parent
 
 - `mindmap:ready`: bridge is loaded; parent can send initial data.
-- `mindmap:app-ready`: Vue and SimpleMindMap are initialized and the parent-provided full data has been applied.
+- `mindmap:app-ready`: Vue and SimpleMindMap are initialized from the parent-provided full data.
 - `mindmap:dirty`: `{ dirty }`; emitted when the edited document changes.
 - `mindmap:save`: `{ requestId, revision, data }`; explicit save request. `Ctrl/Cmd + S` triggers this message.
 - `mindmap:data`: `{ data, dirty, revision }`; response to a data request.
@@ -101,11 +101,33 @@ A minimal init message is:
 
 The bridge waits for `mindmap:init` before starting Vue. `startApp()` also retries if `window.initApp` is not installed yet, closing the small startup race between the bridge module and `main.js`.
 
-When the `app_inited` event supplies the SimpleMindMap instance, the bridge applies the parent-provided full data once more with `setFullData()` before reporting `mindmap:app-ready`. The parent keeps its loading cover visible until this acknowledgement. This prevents the embedded editor from briefly exposing upstream example data such as the default `根节点` before the NocoDB document is ready.
+The parent-provided document is copied into a bootstrap snapshot before the Web UI starts. `getMindMapData()` returns a deep-cloned copy of that snapshot, so the Web UI and SimpleMindMap never share the original parent object by reference.
+
+The upstream `Edit.vue` constructor already consumes `getMindMapData()` when it creates the SimpleMindMap instance. After `app_inited`, the bridge therefore only captures the live MindMap instance and binds change listeners. It deliberately does **not** call `setFullData()` a second time. This keeps initialization single-pass and avoids a second render overwriting theme, view, or node state after the first correct render.
+
+The parent keeps its loading cover visible until `mindmap:app-ready`, so the single upstream initialization finishes before the embedded editor is exposed.
+
+## Data ownership
+
+The bridge separates bootstrap data from runtime data:
+
+```text
+mindmap:init
+  -> deep-cloned bootstrap snapshot
+  -> Web UI creates SimpleMindMap once
+
+runtime edits
+  -> live SimpleMindMap instance
+  -> getData(true) is the authoritative current document
+```
+
+The takeover `saveMindMapData()` hook is retained because the upstream API layer expects it, but data received through that hook is only kept as a cloned compatibility snapshot. It is not used as the authoritative document for explicit saves once the editor is running.
+
+Cross-boundary mind-map data is deep-cloned when it enters the bridge, when the Web UI requests bootstrap data, and when the bridge reads the current document for save/data responses. This prevents initialization or editing code from mutating bridge-owned snapshots through shared object references.
 
 ## Dirty tracking
 
-The bridge keeps the existing takeover `saveMindMapData()` hook, but dirty tracking no longer relies on that indirect path alone.
+The bridge keeps the existing takeover `saveMindMapData()` hook, but dirty tracking does not rely on that indirect path alone.
 
 After initialization it also listens directly to the SimpleMindMap instance for:
 
@@ -120,7 +142,7 @@ A new document can arrive with `dirty: true` in `mindmap:init`; this state is pr
 
 ## Saving model
 
-Normal edits never call the NocoDB API. They update bridge memory and mark the current revision dirty.
+Normal edits never call the NocoDB API. They update the live SimpleMindMap instance and mark the current revision dirty.
 
 ```text
 edit
@@ -128,7 +150,8 @@ edit
   -> no NocoDB PATCH
 
 manual save / Ctrl+S / parent close-confirm save
-  -> getData(true)
+  -> live mindMap.getData(true)
+  -> deep-cloned full data
   -> mindmap:save
   -> userscript PATCHes NocoDB
   -> mindmap:save-result

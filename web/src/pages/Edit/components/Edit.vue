@@ -196,8 +196,8 @@ export default {
       prevImg: '',
       storeConfigTimer: null,
       showDragMask: false,
-      embedSpaceEditShortcut: null,
-      embedSpaceShortcutEnabled: false
+      spaceEditShortcut: null,
+      spaceShortcutEnabled: false
     }
   },
   computed: {
@@ -278,38 +278,31 @@ export default {
       this.mindMap.renderer.startTextEdit()
     },
 
-    enableEmbedSpaceShortcut() {
-      if (!window.nocodbMindMapEmbedMode || !this.mindMap) return
+    enableSpaceEditShortcut() {
+      if (!this.mindMap) return
 
-      if (!this.embedSpaceEditShortcut) {
+      if (!this.spaceEditShortcut) {
         const [shortcut] = this.mindMap.keyCommand.getShortcutFn('F2')
         if (!shortcut) return
         this.mindMap.keyCommand.extendKeyMap('Spacebar', 32)
-        this.embedSpaceEditShortcut = shortcut
+        this.spaceEditShortcut = shortcut
       }
 
-      if (this.embedSpaceShortcutEnabled) return
-      this.mindMap.keyCommand.addShortcut(
-        'Spacebar',
-        this.embedSpaceEditShortcut
-      )
-      this.embedSpaceShortcutEnabled = true
+      if (this.spaceShortcutEnabled) return
+      this.mindMap.keyCommand.addShortcut('Spacebar', this.spaceEditShortcut)
+      this.spaceShortcutEnabled = true
     },
 
-    disableEmbedSpaceShortcut() {
+    disableSpaceEditShortcut() {
       if (
-        !window.nocodbMindMapEmbedMode ||
         !this.mindMap ||
-        !this.embedSpaceEditShortcut ||
-        !this.embedSpaceShortcutEnabled
+        !this.spaceEditShortcut ||
+        !this.spaceShortcutEnabled
       ) {
         return
       }
-      this.mindMap.keyCommand.removeShortcut(
-        'Spacebar',
-        this.embedSpaceEditShortcut
-      )
-      this.embedSpaceShortcutEnabled = false
+      this.mindMap.keyCommand.removeShortcut('Spacebar', this.spaceEditShortcut)
+      this.spaceShortcutEnabled = false
     },
 
     handleEndTextEdit() {
@@ -490,11 +483,9 @@ export default {
       this.mindMap.keyCommand.addShortcut('Control+s', () => {
         this.manualSave()
       })
-      if (window.nocodbMindMapEmbedMode) {
-        this.enableEmbedSpaceShortcut()
-        this.mindMap.on('before_show_text_edit', this.disableEmbedSpaceShortcut)
-        this.mindMap.on('hide_text_edit', this.enableEmbedSpaceShortcut)
-      }
+      this.enableSpaceEditShortcut()
+      this.mindMap.on('before_show_text_edit', this.disableSpaceEditShortcut)
+      this.mindMap.on('hide_text_edit', this.enableSpaceEditShortcut)
       // 转发事件
       ;[
         'node_active',

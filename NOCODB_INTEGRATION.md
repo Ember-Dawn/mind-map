@@ -206,8 +206,8 @@ The NocoDB userscript owns:
 
 The existing root `nginx.conf`, `dist/`, and production-style static deployment files are retained for upstream compatibility, while the provided `docker-compose.yml` uses the Vue development server for hot reload.
 
-## Embed-only shortcut
+## Node-edit shortcut
 
-In NocoDB embed mode, `F2` keeps its upstream behavior and `Space` reuses the **same callback that the live SimpleMindMap instance registered for `F2`**. The WebUI reads that callback with `keyCommand.getShortcutFn('F2')`, explicitly maps `Spacebar` to key code `32`, and registers the same callback for `Spacebar`. This avoids maintaining a second node-edit implementation and guarantees that both keys enter the same editor path.
+Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior and `Space` reuses the **same callback that the live SimpleMindMap instance registered for `F2`**. The WebUI reads that callback with `keyCommand.getShortcutFn('F2')`, explicitly maps `Spacebar` to key code `32`, and registers the same callback for `Spacebar`. This avoids maintaining a second node-edit implementation and guarantees that both keys enter the same editor path.
 
-The Space binding is temporarily removed on `before_show_text_edit` and restored on `hide_text_edit`, so Space remains normal text input while a node is being edited. The WebUI intentionally performs this binding on the live installed `simple-mind-map` instance rather than editing the repository's separate `simple-mind-map/src/` checkout, because `web/package.json` currently loads `simple-mind-map` from the installed npm dependency.
+The Space binding is temporarily removed on `before_show_text_edit` and restored on `hide_text_edit`, so Space remains normal text input while a node is being edited. This binding intentionally applies globally rather than depending on `window.nocodbMindMapEmbedMode`, because node editing is a WebUI behavior rather than an NocoDB-only integration behavior. The WebUI performs the binding on the live installed `simple-mind-map` instance rather than editing the repository's separate `simple-mind-map/src/` checkout, because `web/package.json` currently loads `simple-mind-map` from the installed npm dependency.

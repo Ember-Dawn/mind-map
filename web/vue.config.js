@@ -13,7 +13,7 @@ module.exports = {
   outputDir: '../dist',
   lintOnSave: false,
   productionSourceMap: false,
-  filenameHashing: false,
+  filenameHashing: isDev,
   transpileDependencies: ['yjs', 'lib0', 'quill'],
   chainWebpack: config => {
     // 移除 preload 插件
@@ -51,6 +51,11 @@ module.exports = {
     sockHost: devServerPublicHost,
     sockPort: 443,
     sockPath: '/sockjs-node',
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0'
+    },
     watchOptions: {
       poll: 1000,
       ignored: /node_modules/

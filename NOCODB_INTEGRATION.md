@@ -24,7 +24,7 @@ http://localhost:9871
 
 The repository is bind-mounted into the container so edits under `web/src/` are visible immediately. `/app/web/node_modules` is stored in the Docker named volume `mind-map-node-modules`. On first start, the container runs `npm ci` automatically if `node_modules/.bin/vue-cli-service` is missing.
 
-The development server is published through `https://mindmap.380782744.xyz`. Because TLS terminates at Cloudflare while webpack-dev-server itself still listens on plain HTTP inside the container, `web/vue.config.js` explicitly tells the webpack-dev-server v3 client to use the public HTTPS host for SockJS/HMR instead of `localhost:8080`. The defaults can be overridden with `MIND_MAP_DEV_PUBLIC_HOST` and `MIND_MAP_DEV_PUBLIC_URL` if the public development hostname changes.
+The development server is published through `https://mindmap.380782744.xyz`. Because TLS terminates at Cloudflare while webpack-dev-server itself still listens on plain HTTP inside the container, `web/vue.config.js` explicitly tells the webpack-dev-server v3 client to use the public HTTPS host for SockJS/HMR instead of `localhost:8080`. Development responses also send `Cache-Control: no-store` and use filename hashing in development so a browser, Cloudflare edge, or iframe reload does not keep reusing a stale fixed `/js/app.js`. The defaults can be overridden with `MIND_MAP_DEV_PUBLIC_HOST` and `MIND_MAP_DEV_PUBLIC_URL` if the public development hostname changes.
 
 ## Embed URL
 
@@ -210,8 +210,6 @@ The existing root `nginx.conf`, `dist/`, and production-style static deployment 
 
 ## Node-edit shortcut
 
-Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior and `Space` enters the same node editor through the callback that the live SimpleMindMap instance registered for `F2`.
+Across the full WebUI, including standalone mode and NocoDB embed mode, `F2` keeps its upstream behavior and `Space` reuses the **same callback registered for `F2` by the live SimpleMindMap instance**. The WebUI explicitly extends the runtime key map with `Spacebar = 32` and registers that F2 callback through SimpleMindMap's own `keyCommand` system. This is the same runtime path that was verified manually in the browser console.
 
-`Space` is intentionally handled by a small capture-phase `keydown` adapter rather than being registered as another SimpleMindMap `keyCommand` shortcut. The adapter only acts when exactly one node is selected, no text editor is already open, no modifier key is pressed, and focus is not in an input, textarea, select, or contenteditable element. It prevents the triggering Space from becoming text input, stops that key event from reaching the normal shortcut chain, and invokes the upstream F2 callback on the next animation frame. Delaying the callback until the original Space event has finished avoids the RichText/TextEdit editor being created and immediately affected by the same printable key event, which previously could make the first editor frame appear at the page origin before a later input corrected its position.
-
-Once node editing is active, the adapter does nothing, so Space is ordinary text input inside both the plain text editor and the RichText editor. The implementation still reuses the installed runtime `simple-mind-map` F2 behavior rather than maintaining a separate node-edit path.
+The Space shortcut is removed on `before_show_text_edit` and restored on `hide_text_edit`. Therefore Space can open the selected node editor while the canvas is active, but once text editing begins, Space is no longer a global shortcut and remains normal text input. This avoids maintaining a parallel window-level keyboard dispatcher and keeps F2/Space behavior inside SimpleMindMap's existing shortcut checks.

@@ -46,7 +46,7 @@ web/vue.config.js
 
 When one of those paths changes, `web/scripts/static-watch.js` debounces the events, runs a production Vue build, copies the complete build to a new release directory, writes `build.json`, and atomically switches `/site/current` to the new release. Nginx keeps serving the previous successful release while a new build is running, so a failed build does not replace the working site with a partial or broken release.
 
-This is **automatic rebuild + automatic publish**, not browser HMR. An already-open standalone page or NocoDB iframe continues running the JavaScript bundle it originally loaded. After `build published` appears in the builder log, refresh the standalone WebUI or close and reopen the NocoDB MindMap modal to load the new release.
+This is **automatic rebuild + automatic publish**, not browser HMR. An already-open standalone page or NocoDB iframe continues running the JavaScript bundle it originally loaded. After `build published` appears in the builder log, refresh the standalone WebUI or refresh the current NocoDB page before testing the new embed build. Closing and reopening the MindMap modal is not sufficient anymore because the current integration keeps one iframe alive and reuses it across modal opens and record switches.
 
 Useful commands:
 
@@ -92,7 +92,7 @@ Example:
 /?embed=1&parentOrigin=https%3A%2F%2Fnocodb.380782744.xyz
 ```
 
-In embed mode the Web UI uses a dedicated NocoDB adapter instead of the upstream `window.takeOverApp` document-storage path. Vue waits for `mindmap:init`; the parent-provided full document is then used directly to create the SimpleMindMap instance. Standalone mode and the upstream takeover mode remain unchanged.
+In embed mode the Web UI uses a dedicated NocoDB adapter instead of the upstream `window.takeOverApp` document-storage path. Vue waits for the first `mindmap:init`; the parent-provided full document is then used directly to create the SimpleMindMap instance. Later `mindmap:init` messages reuse the already-running Vue/SimpleMindMap instance to switch the current record document. Standalone mode and the upstream takeover mode remain unchanged.
 
 ## Message protocol
 
@@ -116,8 +116,8 @@ Web UI messages:
 
 ### Web UI -> parent
 
-- `mindmap:ready`: bridge is loaded and available. It is emitted on startup and also in response to `mindmap:hello`, so a prewarmed iframe can be adopted later without losing the one-time startup signal.
-- `mindmap:app-ready`: Vue and SimpleMindMap are initialized from the parent-provided full data.
+- `mindmap:ready`: bridge is loaded and available. It is emitted on startup and also in response to `mindmap:hello`, so readiness can be re-confirmed without relying on a one-time startup signal.
+- `mindmap:app-ready`: the current record document has finished initial loading or a later record switch and is ready for editing.
 - `mindmap:dirty`: `{ dirty, revision }`; emitted after initialization when the live document changes. Repeated edits while already dirty still emit the new revision so auto-save debounce can restart.
 - `mindmap:save`: `{ requestId, revision, data }`; explicit save request. `Ctrl/Cmd + S` triggers this message.
 - `mindmap:data`: `{ data, dirty, revision }`; response to a data request.
@@ -126,7 +126,7 @@ Web UI messages:
 ### Parent -> Web UI
 
 - `mindmap:hello`: reusable readiness handshake. The bridge replies with `mindmap:ready` every time it receives a valid hello.
-- `mindmap:init`: supplies the initial full SimpleMindMap data and starts the app. The NocoDB userscript normally sends `dirty: false`; initialization itself never makes the document dirty.
+- `mindmap:init`: supplies a complete SimpleMindMap document. The first valid init starts Vue/SimpleMindMap; later init messages replace the current record document in the persistent instance and reset the dirty/save baseline. The NocoDB userscript normally sends `dirty: false`; initialization itself never makes the document dirty.
 - `mindmap:request-save`: asks the Web UI to send its latest `getData(true)` through `mindmap:save`.
 - `mindmap:request-data`: asks the Web UI to return current data without saving.
 - `mindmap:save-result`: `{ requestId, ok, error }`; acknowledges the NocoDB PATCH result.
@@ -154,9 +154,12 @@ Language, editor configuration, and local UI preferences remain normal Web UI lo
 
 ## Initialization model
 
-The dedicated embed bridge sets `window.nocodbMindMapEmbedMode` before Vue starts. A parent that adopts a prewarmed iframe first sends `mindmap:hello`; the bridge responds with `mindmap:ready`, after which the parent can safely send `mindmap:init`. The app still waits for `mindmap:init`; no record editor is instantiated before the parent provides the full NocoDB document.
+The dedicated embed bridge sets `window.nocodbMindMapEmbedMode` before Vue starts. The first iframe load follows a normal `mindmap:hello` -> `mindmap:ready` handshake. The app still waits for the first `mindmap:init`; no record editor is instantiated before the parent provides the full NocoDB document.
+
+First open in a NocoDB page:
 
 ```text
+iframe load
 parent -> mindmap:hello
 bridge -> mindmap:ready
 mindmap:init
@@ -165,28 +168,48 @@ mindmap:init
   -> Edit.vue calls getData()
   -> new MindMap({ data, layout, theme, themeConfig, viewData })
   -> attach the live MindMap instance to the adapter
+  -> establish baseline after render settles
   -> mindmap:app-ready
 ```
 
-Embed mode deliberately does **not** use `window.takeOverApp` for document persistence, does not merge partial document snapshots in `api/index.js`, and does not call `setFullData()` after initialization. The live SimpleMindMap instance is therefore the only runtime document state after startup.
+Later record switches reuse that same running app:
+
+```text
+parent reads Record B
+parent -> mindmap:init(Record B full document)
+  -> cancel/clear previous record transient save state
+  -> replace bridge initialData/current document context
+  -> existing MindMap.setFullData(...)
+  -> reset view/render for the new full document
+  -> establish a new baseline after render settles
+  -> mindmap:app-ready
+```
+
+Embed mode deliberately does **not** use `window.takeOverApp` for document persistence and does not merge partial document snapshots in `api/index.js`. The live SimpleMindMap instance remains the only runtime document state. `setFullData()` is used only when switching a persistent iframe from one complete NocoDB record document to another; it is not a second storage layer.
 
 Standalone Web UI behavior and the upstream `window.takeOverApp` path for other integrations are preserved.
 
 ## Data ownership
 
-The document has one-way ownership during startup and one authoritative runtime source:
+The document has one authoritative parent source at load/switch time and one authoritative runtime source while editing:
 
 ```text
+first record
 parent/NocoDB JSON
   -> initialData snapshot
   -> SimpleMindMap constructor
+
+later record switch
+parent/NocoDB JSON
+  -> new full-document snapshot
+  -> existing SimpleMindMap.setFullData(...)
 
 runtime
   -> live SimpleMindMap instance
   -> mindMap.getData(true) for save/data responses
 ```
 
-Normal upstream `storeData()` calls are intercepted only in NocoDB embed mode and reduced to `markDirty()`. They no longer maintain a second merged document object. This avoids theme/layout/view state being overwritten by an independent storage copy.
+Normal upstream `storeData()` calls are intercepted only in NocoDB embed mode and reduced to `markDirty()`. They do not maintain a second merged document object. This avoids theme/layout/view state being overwritten by an independent storage copy.
 
 ## Dirty tracking
 
@@ -201,6 +224,8 @@ view_theme_change
 Upstream `storeData()` calls in embed mode also reduce to `markDirty()` as a compatibility path. A microtask-level dedupe prevents one logical change from incrementing the revision multiple times in the same task.
 
 Initial render events are ignored until the renderer settles. The adapter then records the current full document as the baseline and only marks dirty when a later `getData(true)` snapshot differs from that baseline. Opening a record without editing therefore remains clean.
+
+Before a later `mindmap:init` switches records, the bridge clears the previous document's auto-save/pending-save state and resets initialization guards. The new document establishes its own baseline only after its render settles, so asynchronous state from the previous record cannot clear or mark dirty on the new record.
 
 ## Saving model
 
@@ -237,13 +262,41 @@ theme.template = classic15
 
 `logicalStructure` is the right-expanding `逻辑结构图`; `classic15` is the `simple-mind-map-plugin-themes` theme displayed as `脑图经典15`. Existing NocoDB mind maps retain their saved layout and theme.
 
-## Performance
+## Performance and iframe lifecycle
 
-The userscript preconnects to the MindMap origin and creates a persistent off-screen embed iframe while the NocoDB page is idle. It does not send `mindmap:init`, so no record editor is created, but the Web UI document and modules are already loaded. On the next open the same iframe is moved into the modal and the parent actively performs a `mindmap:hello` -> `mindmap:ready` handshake. This avoids relying on a startup-only ready event that may have fired long before the modal existed.
+The current integration uses **preconnect + first-use lazy load + one persistent iframe per NocoDB page**.
 
-The parent also has recovery timers: if the adopted iframe does not answer the handshake, or if it answers but does not reach `mindmap:app-ready` after initialization, the userscript replaces it with one fresh iframe and retries once. A second failure is surfaced as an explicit WebUI initialization error instead of leaving the loading cover forever. After a modal closes, a new off-screen iframe is prepared for the following open.
+When the NocoDB page starts, the userscript only adds a preconnect hint for the MindMap origin. It does **not** create a hidden/off-screen MindMap iframe and does not start Vue or SimpleMindMap in the background.
 
-The current public deployment serves production-built hashed assets through nginx. The builder publishes a release only after the entire Vue build succeeds, and the `/site/current` symlink is switched atomically. Existing browser tabs and already-open iframes are not forcibly reloaded when a release is published; reload or reopen them after `build published` when testing new frontend behavior.
+```text
+NocoDB page start
+  -> preconnect to mindmap origin only
+
+first MindMap open
+  -> create the real iframe
+  -> iframe loads WebUI
+  -> hello / ready
+  -> init current record
+  -> Vue + SimpleMindMap start once
+
+modal close
+  -> hide the outer modal
+  -> keep iframe / Vue / SimpleMindMap alive
+
+later MindMap open
+  -> reuse the same iframe
+  -> fetch target NocoDB record
+  -> send a new mindmap:init
+  -> switch full document in the existing instance
+```
+
+This means resource usage is **not one iframe per record** and **not one iframe per table**. Within one NocoDB browser tab / SPA page instance there is at most one persistent MindMap iframe, shared by all records and by table navigation that does not cause a full page reload. A second NocoDB browser tab has its own userscript runtime and therefore may keep its own single persistent iframe.
+
+The trade-off is deliberate: after the first use, one iframe document, one Vue app, one SimpleMindMap instance, and the current record document stay in memory until that NocoDB page is refreshed or closed. In return, later opens avoid re-downloading and reinitializing the whole WebUI and normally pay only the NocoDB GET plus full-document switch/render cost.
+
+The parent still has recovery timers, but the iframe handshake timer starts only after the real iframe `load` event. Network download time is therefore no longer counted against the 8-second hello/ready window. This avoids the old failure mode where a slow-but-valid first load was declared failed, replaced, and then appeared to work only on the retry because browser caches were warm.
+
+The current public deployment serves production-built hashed assets through nginx. The builder publishes a release only after the entire Vue build succeeds, and the `/site/current` symlink is switched atomically. Existing browser tabs and persistent NocoDB iframes are not forcibly reloaded when a release is published; refresh the NocoDB page after `build published` when testing new frontend behavior.
 
 ## Repository responsibilities
 
@@ -254,7 +307,7 @@ The NocoDB userscript owns:
 - record/base/table context;
 - NocoDB API token storage and status UI;
 - GET/PATCH requests;
-- the outer modal and iframe;
+- the outer modal and persistent iframe lifecycle;
 - explicit save and close confirmation;
 - validating the iframe origin before accepting messages.
 
@@ -275,13 +328,15 @@ This delay is important. A previous implementation registered the F2 callback di
 The following points were verified during the NocoDB/Space integration work and should be treated as maintenance constraints rather than rediscovered assumptions:
 
 - **Source freshness must be verified at runtime.** During earlier debugging, GitHub and the bind-mounted source contained new methods while the browser's Vue instance did not. Console checks such as `typeof document.querySelector('.editContainer')?.__vue__?.<method>` exposed that the page was still executing an old bundle. Do not conclude that a new shortcut implementation is broken until the served build is confirmed current.
-- **The old webpack-dev-server deployment could obscure version state.** Cloudflare, iframe prewarming, fixed/static bundle URLs, and an already-open page made it possible to keep exercising an old runtime even after source changes. The current hashed production build + atomic nginx deployment was introduced to remove that ambiguity.
+- **The old webpack-dev-server deployment could obscure version state.** Cloudflare, iframe caching, fixed/static bundle URLs, and an already-open page made it possible to keep exercising an old runtime even after source changes. The current hashed production build + atomic nginx deployment was introduced to remove that ambiguity.
 - **A successful source update is not the same as a successful publish.** Wait for `[static-build] ... build published ...` before testing. While a build is running, nginx intentionally keeps serving the last successful release. If a build fails, the previous release remains live.
-- **Open pages do not hot-reload.** The current architecture automatically rebuilds and publishes, but does not replace JavaScript inside an already-open tab or iframe. Refresh standalone pages and reopen the NocoDB modal before testing a newly published frontend change.
+- **Open pages and persistent iframes do not hot-reload.** The current architecture automatically rebuilds and publishes, but does not replace JavaScript inside an already-open tab or the persistent NocoDB iframe. Refresh standalone pages and refresh the NocoDB page before testing a newly published frontend change; merely closing/reopening the modal reuses the old iframe.
+- **Keep one persistent iframe per NocoDB page.** Do not reintroduce one iframe per record/table or background off-screen iframe accumulation. Record switches should reuse the existing app and replace the complete document through the embed bridge.
+- **Do not start handshake timeout before iframe `load`.** Network loading and hello/ready handshake are different phases. Starting the 8-second handshake timer before `load` can recreate the old false-timeout/retry behavior on cold or slow loads.
 - **Do not map printable Space directly to the F2 callback synchronously.** It works functionally but can corrupt the first text-editor positioning pass. Keep the current `preventDefault` + next-animation-frame F2 callback design unless the underlying SimpleMindMap input lifecycle changes and is re-tested.
 - **Do not replace the runtime F2 callback with a custom `textEdit.show()` implementation without a concrete reason.** Reusing `getShortcutFn('F2')` keeps Space aligned with upstream editing behavior and reduces maintenance drift.
 - **Node 20 + webpack 4 production builds need the OpenSSL compatibility option in the current toolchain.** Removing `NODE_OPTIONS=--openssl-legacy-provider` reproduces `error:0308010C:digital envelope routines::unsupported` during Terser minification. Re-evaluate this only after upgrading the frontend build stack.
-- **The userscript does not need a Space-specific change.** Space editing is owned by this WebUI repository. The userscript remains responsible for NocoDB context, iframe lifecycle/prewarm, messaging, API access, and persistence.
+- **The userscript does not need a Space-specific change.** Space editing is owned by this WebUI repository. The userscript remains responsible for NocoDB context, persistent iframe lifecycle, messaging, API access, and persistence.
 
 When debugging future frontend changes, prefer this order:
 
@@ -289,6 +344,6 @@ When debugging future frontend changes, prefer this order:
 1. confirm source file changed
 2. confirm builder log reached "build published"
 3. check /build.json builtAt
-4. refresh standalone WebUI / reopen NocoDB modal
+4. refresh standalone WebUI / refresh the NocoDB page
 5. inspect the live Vue instance or shortcut map only after the new build is definitely loaded
 ```

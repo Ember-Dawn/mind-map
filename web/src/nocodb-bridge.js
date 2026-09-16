@@ -35,7 +35,9 @@ if (isEmbedMode) {
     initialDirty: false,
     revision: 0,
     lastSaveRequestId: 0,
-    pendingSaves: new Map()
+    pendingSaves: new Map(),
+    initGeneration: 0,
+    reinitializeOnAttach: false
   }
 
   window.nocodbMindMapEmbedMode = true
@@ -136,10 +138,17 @@ if (isEmbedMode) {
       window.clearTimeout(state.settleTimer)
       state.settleTimer = null
     }
+    const generation = state.initGeneration
 
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        if (state.initialized || !state.mindMap) return
+        if (
+          state.initialized ||
+          !state.mindMap ||
+          generation !== state.initGeneration
+        ) {
+          return
+        }
         const currentData = getCurrentData()
         state.baselineSignature = getSignature(currentData)
         state.lastObservedSignature = state.baselineSignature
@@ -176,9 +185,44 @@ if (isEmbedMode) {
       mindMap.on('node_tree_render_end', finishInitialization)
     }
 
+    if (state.reinitializeOnAttach) {
+      state.reinitializeOnAttach = false
+      reinitializeMindMap()
+      return
+    }
+
     // Initial rendering can emit document/view events. Keep the loading cover up
     // and establish the baseline only after the renderer has settled.
     state.settleTimer = window.setTimeout(waitForInitialRender, 50)
+  }
+
+  const prepareInitialization = (data, imageUploadConfig, dirty) => {
+    clearAutoSave()
+    if (state.settleTimer) {
+      window.clearTimeout(state.settleTimer)
+      state.settleTimer = null
+    }
+    state.initGeneration += 1
+    state.initialized = false
+    state.dirtyMarkQueued = false
+    state.initialData = cloneJson(data)
+    state.imageUploadConfig = cloneJson(imageUploadConfig || null)
+    state.initialDirty = Boolean(dirty)
+    state.dirty = state.initialDirty
+    state.baselineSignature = ''
+    state.lastObservedSignature = ''
+    state.revision = 0
+    state.pendingSaves.clear()
+  }
+
+  const reinitializeMindMap = () => {
+    if (!state.mindMap || typeof state.mindMap.setFullData !== 'function') return false
+    state.mindMap.setFullData(cloneJson(state.initialData))
+    if (state.mindMap.view && typeof state.mindMap.view.reset === 'function') {
+      state.mindMap.view.reset()
+    }
+    state.settleTimer = window.setTimeout(waitForInitialRender, 50)
+    return true
   }
 
   window.nocodbMindMapEmbed = {
@@ -221,14 +265,21 @@ if (isEmbedMode) {
         postToParent('mindmap:ready')
         break
       case 'mindmap:init':
-        if (state.appStarted) return
         if (!message.data || typeof message.data !== 'object') return
-        state.initialData = cloneJson(message.data)
-        state.imageUploadConfig = cloneJson(message.imageUploadConfig || null)
-        state.initialDirty = Boolean(message.dirty)
-        state.dirty = state.initialDirty
-        state.revision = 0
-        startApp()
+        prepareInitialization(
+          message.data,
+          message.imageUploadConfig,
+          message.dirty
+        )
+        if (!state.appStarted) {
+          startApp()
+          break
+        }
+        if (!state.mindMap) {
+          state.reinitializeOnAttach = true
+          break
+        }
+        reinitializeMindMap()
         break
       case 'mindmap:image-upload-config':
         state.imageUploadConfig = cloneJson(message.imageUploadConfig || null)
